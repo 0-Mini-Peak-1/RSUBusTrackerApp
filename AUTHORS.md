@@ -1,1 +1,1 @@
-/* Original Code by [CHAWAGORN TOOMMA], RSU Bus Tracker Project 2024 */
+Original Code by [**CHAWAGORN TOOMMA**](https://www.facebook.com/ChawagornToomma), RSU Bus Tracker Project 2025 @ Rangsit University
