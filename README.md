@@ -144,7 +144,7 @@ erDiagram
 
 1. **Clone the repository:**
 ```bash
-git clone [https://github.com/0-Mini-Peak-1/RSUBusTrackerApp](https://github.com/0-Mini-Peak-1/RSUBusTrackerApp)
+git clone https://github.com/0-Mini-Peak-1/RSUBusTrackerApp
 
 ```
 
