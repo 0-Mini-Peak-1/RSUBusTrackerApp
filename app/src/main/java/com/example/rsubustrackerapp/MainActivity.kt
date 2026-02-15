@@ -22,6 +22,17 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material.icons.filled.*
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import kotlinx.coroutines.launch
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 
 // 1. Ensure this extends ComponentActivity
 class MainActivity : ComponentActivity() {
@@ -29,13 +40,28 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                // STATE: Keeps track of which screen we are on
                 var isLoggedIn by remember { mutableStateOf(false) }
-
-                if (isLoggedIn) {
-                    TrackerScreen(onBackClick = { isLoggedIn = false })
-                } else {
-                    LoginScreen(onLoginSuccess = { isLoggedIn = true })
+                // This wrapper handles the sliding automatically
+                AnimatedContent(
+                    targetState = isLoggedIn,
+                    label = "Screen Transition",
+                    transitionSpec = {
+                        if (targetState) {
+                            // CASE 1: (Login -> Tracker)
+                            slideInHorizontally { width -> width } togetherWith
+                                    slideOutHorizontally { width -> -width }
+                        } else {
+                            // CASE 2: (Tracker -> Login)
+                            slideInHorizontally { width -> -width } togetherWith
+                                    slideOutHorizontally { width -> width }
+                        }
+                    }
+                ) { targetState ->
+                    if (targetState) {
+                        TrackerScreen(onBackClick = { isLoggedIn = false })
+                    } else {
+                        LoginScreen(onLoginSuccess = { isLoggedIn = true })
+                    }
                 }
             }
         }
@@ -202,9 +228,23 @@ fun InfoRow(
 
 @Composable
 fun TrackerScreen(onBackClick: () -> Unit) {
-    // Colors from your design
+    // Background Colors
     val gradientTop = Color(0xFFC85D8D)
     val gradientBottom = Color(0xFF6CAADC)
+
+    // Animation State
+    val cardOffsetY = remember { Animatable(100f) }
+
+    // Trigger Animation
+    LaunchedEffect(Unit) {
+        cardOffsetY.animateTo(
+            targetValue = 0f,
+            animationSpec = spring(
+                dampingRatio = 0.6f,
+                stiffness = Spring.StiffnessLow
+            )
+        )
+    }
 
     Box(
         modifier = Modifier
@@ -215,72 +255,103 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                 )
             )
     ) {
+        // Back Button
+        IconButton(
+            onClick = onBackClick,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(top = 48.dp, start = 24.dp)
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = "Back",
+                tint = Color.White,
+                modifier = Modifier.size(32.dp)
+            )
+        }
+
         // We use a Box with padding to create the "Layered" effect
+        // Moving Card Container
         Box(
             modifier = Modifier
+                .align(Alignment.BottomCenter)
                 .fillMaxSize()
-                .padding(top = 80.dp) // Leave space at top for background
+                .padding(top = 120.dp) // Fixed padding
+                .offset(y = cardOffsetY.value.dp) // APPLY THE BOUNCE!
         ) {
             // 1. The Main White Card (The Body)
             Surface(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(top = 20.dp), // Push it down slightly so the "Tab" sticks out
+                    .padding(top = 24.dp), // Push it down slightly so the "Tab" sticks out
                 shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
                 color = Color.White
             ) {
-                Column(
+                // 2. SCROLLABLE LIST
+                LazyColumn(
                     modifier = Modifier
-                        .padding(top = 60.dp, start = 24.dp, end = 24.dp) // Content padding
                         .fillMaxSize()
+                        .padding(top = 60.dp, start = 24.dp, end = 24.dp), // Padding inside the card
+                    verticalArrangement = Arrangement.spacedBy(8.dp) // Space between items
                 ) {
-                    // Two Buttons Row
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Button(
-                            onClick = { /* TODO: Start GPS */ },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF3E5F5)), // Light Purple
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).padding(end = 8.dp)
+                    // Item 1: The Buttons Row
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("Activate GPS", color = Color(0xFF6A1B9A))
-                        }
+                            Button(
+                                onClick = { /* Start */ },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF3E5F5)),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f).padding(end = 8.dp)
+                            ) { Text("Activate GPS", color = Color(0xFF6A1B9A)) }
 
-                        Button(
-                            onClick = { /* TODO: Stop GPS */ },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF3E5F5)),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).padding(start = 8.dp)
-                        ) {
-                            Text("Deactivate GPS", color = Color(0xFF6A1B9A))
+                            Button(
+                                onClick = { /* Stop */ },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF3E5F5)),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f).padding(start = 8.dp)
+                            ) { Text("Deactivate GPS", color = Color(0xFF6A1B9A)) }
                         }
+                        Spacer(modifier = Modifier.height(24.dp))
                     }
 
-                    Spacer(modifier = Modifier.height(32.dp))
-
-                    // The Stats List (Scrollable)
-                    // Note: Using standard icons to prevent errors.
-                    InfoRow(Icons.Default.DirectionsBus, "Station", "Building 1")
-                    InfoRow(Icons.Default.Navigation, "Heading Direction", "-0.0")
-                    InfoRow(Icons.Default.LocationSearching, "Accuracy", "5.0")
-                    InfoRow(Icons.Default.Schedule, "Last Update", "2025-11-08 18:32:33")
-                    InfoRow(Icons.Default.Info, "Ongoing Speed", "120 km/h") // Placeholder icon
-                    InfoRow(Icons.Default.Place, "Latitude", "13.9669517")
-                    InfoRow(Icons.Default.Place, "Longitude", "100.5834")
-                    InfoRow(Icons.Default.DateRange, "Time Elapsed", "290")
+                    // Item 2-9: The Info Rows
+                    item { InfoRow(Icons.Default.DirectionsBus, "Station", "Building 1") }
+                    item { InfoRow(Icons.Default.Navigation, "Heading Direction", "-0.0") }
+                    item { InfoRow(Icons.Default.LocationSearching, "Accuracy", "5.0") }
+                    item { InfoRow(Icons.Default.Schedule, "Last Update", "2025-11-08 18:32:33") }
+                    item { InfoRow(Icons.Default.Info, "Ongoing Speed", "120 km/h") }
+                    item { InfoRow(Icons.Default.Place, "Latitude", "13.9669517") }
+                    item { InfoRow(Icons.Default.Place, "Longitude", "100.5834") }
+                    item {
+                        InfoRow(Icons.Default.DateRange, "Time Elapsed", "290")
+                        Spacer(modifier = Modifier.height(50.dp)) // Bottom padding
+                    }
                 }
             }
 
-            // 2. The "Tracker Menu" Tab (Floating on top left)
+            // THE SAFETY SKIRT
+            // This is a white box that hangs BELOW the screen.
+            // When the card bounces UP, this gets pulled up to cover the gap.
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter) // Anchor to bottom
+                    .fillMaxWidth()
+                    .height(500.dp) // Make it tall
+                    .offset(y = 500.dp) // Push it completely off-screen (downwards)
+                    .background(Color.White)
+            )
+
+            // 3. The "Tracker Menu"
             Surface(
                 modifier = Modifier
                     .padding(start = 24.dp), // Align left
                 shape = RoundedCornerShape(20.dp),
                 border = BorderStroke(1.dp, Color.Black),
                 color = Color.White,
-                shadowElevation = 4.dp
+                shadowElevation = 8.dp // Increased shadow for "pop"
             ) {
                 Text(
                     text = "Tracker Menu",
@@ -289,21 +360,6 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                     fontSize = 16.sp
                 )
             }
-
-        }
-
-        IconButton(
-            onClick = onBackClick, // Call the function when clicked
-            modifier = Modifier
-                .align(Alignment.TopStart) // Stick to top left
-                .padding(top = 40.dp, start = 16.dp) // Leave space for Status Bar
-        ) {
-            Icon(
-                imageVector = Icons.Default.ArrowBack,
-                contentDescription = "Back",
-                tint = Color.White, // White icon to look good on the gradient
-                modifier = Modifier.size(32.dp) // Make it slightly larger
-            )
         }
     }
 }
