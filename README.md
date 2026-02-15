@@ -1,6 +1,6 @@
 # RSU Bus Tracker (Rangsit University Shuttle System)
 
-**RSU Bus Tracker** is a comprehensive "Mega Project" designed to modernize the shuttle bus operations at Rangsit University. This system replaces legacy hardware with a modern, stable solution that provides real-time tracking, estimated passenger density via Computer Vision, and route optimization data.
+**RSU Bus Tracker** is a comprehensive project designed to modernize the shuttle bus operations at Rangsit University. This system replaces legacy hardware with a modern, stable solution that provides real-time tracking, estimated passenger density via Computer Vision, and route optimization data.
 
 ## Project Overview
 
