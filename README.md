@@ -127,7 +127,7 @@ erDiagram
 
 | Login Screen | Tracker Dashboard |
 | --- | --- |
-| Currently we have no picture :/ <img src="docs/login_screen.png" width="300" /> | Currently we have no picture :/ <img src="docs/tracker_screen.png" width="300" /> |
+| <img src="docs/login_screen.png" width="300" /> | <img src="docs/tracker_screen.png" width="300" /> |
 | *Clean gradient UI with vehicle authentication* | *Real-time telemetry stats with slide animations* |
 
 ---
