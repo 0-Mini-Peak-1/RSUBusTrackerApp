@@ -32,6 +32,9 @@ import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import retrofit2.Call
+import retrofit2.Callback
+import retrofit2.Response
 
 @Composable
 fun TrackerScreen(onBackClick: () -> Unit) {
@@ -43,8 +46,11 @@ fun TrackerScreen(onBackClick: () -> Unit) {
     val context = LocalContext.current
     val sharedPref = context.getSharedPreferences("BusTrackerPrefs", Context.MODE_PRIVATE)
     val vehicleName = sharedPref.getString("CURRENT_VEHICLE_NAME", "Bus") ?: "Bus"
+    val vehicleId = sharedPref.getString("CURRENT_VEHICLE_ID", "") ?: ""
 
     // Live data states
+    var stopsList by remember { mutableStateOf<List<Stop>>(emptyList()) }
+    var currentStation by remember { mutableStateOf("En Route") }
     var isTracking by remember { mutableStateOf(false) }
     var latitude by remember { mutableStateOf("0.0") }
     var longitude by remember { mutableStateOf("0.0") }
@@ -67,6 +73,59 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                 timeElapsedSeconds = (currentTime - startTime) / 1000
                 delay(1000L)
             }
+        }
+    }
+
+    // Fetch Stops
+    LaunchedEffect(Unit) {
+        RetrofitClient.instance.getStops().enqueue(object : Callback<List<Stop>> {
+            override fun onResponse(call: Call<List<Stop>>, response: Response<List<Stop>>) {
+                if (response.isSuccessful) {
+                    stopsList = response.body() ?: emptyList()
+                    println("Loaded ${stopsList.size} stops")
+                }
+            }
+            override fun onFailure(call: Call<List<Stop>>, t: Throwable) {
+                println("Failed to load stops: ${t.message}")
+            }
+        })
+    }
+
+    // Stops Helper
+    fun checkNearestStop(currentLat: Double, currentLng: Double) {
+        val detectionRadius = 50.0 // meters (Threshold)
+        var foundStop = "En Route" // Default if no stop matches
+
+        for (stop in stopsList) {
+            val results = FloatArray(1)
+            // Android's built-in math to calculate distance in meters
+            Location.distanceBetween(currentLat, currentLng, stop.lat, stop.lng, results)
+            val distanceInMeters = results[0]
+
+            if (distanceInMeters <= detectionRadius) {
+                foundStop = stop.nameEn // Or stop.nameTh
+                break // Found one, stop searching
+            }
+        }
+        currentStation = foundStop
+    }
+
+    // Backend Helper
+    fun setVehicleStatus(status: String) {
+        if (vehicleId.isNotBlank()) {
+            val request = StatusRequest(status = status)
+            RetrofitClient.instance.updateStatus(vehicleId, request).enqueue(object : Callback<Void> {
+                override fun onResponse(call: Call<Void>, response: Response<Void>) {
+                    if (response.isSuccessful) {
+                        println("Status updated to: $status")
+                    } else {
+                        println("Failed to update status")
+                    }
+                }
+                override fun onFailure(call: Call<Void>, t: Throwable) {
+                    println("Error: ${t.message}")
+                }
+            })
         }
     }
 
@@ -100,6 +159,9 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                 bearing = "${location.bearing}°"
                 accuracy = "${location.accuracy} m"
                 lastUpdate = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                // Load stops
+                checkNearestStop(location.latitude, location.longitude)
+
             }
         } else {
             // Permission Denied
@@ -132,7 +194,13 @@ fun TrackerScreen(onBackClick: () -> Unit) {
     ) {
         // Back Button
         IconButton(
-            onClick = onBackClick,
+            onClick = {
+                if (isTracking) {
+                    locationClient.stopLocationUpdates()
+                    setVehicleStatus("inactive")
+                }
+                onBackClick()
+            },
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(top = 48.dp, start = 24.dp)
@@ -188,6 +256,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                                         // Check Permission
                                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
                                             isTracking = true
+                                            setVehicleStatus("active")
                                             locationClient.startLocationUpdates { location ->
                                                 latitude = location.latitude.toString()
                                                 longitude = location.longitude.toString()
@@ -195,6 +264,9 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                                                 bearing = "${location.bearing}°"
                                                 accuracy = "${location.accuracy} m"
                                                 lastUpdate = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                                                // Load stops
+                                                checkNearestStop(location.latitude, location.longitude)
+
                                             }
                                         } else {
                                             // Ask for Permission
@@ -219,6 +291,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                                 onClick = {
                                     isTracking = false
                                     timeElapsedSeconds = 0 // Reset timer
+                                    setVehicleStatus("inactive")
                                     locationClient.stopLocationUpdates()
                                     // Optional: Reset values or keep last known location
                                     speed = "0 km/h"
@@ -233,8 +306,8 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                         Spacer(modifier = Modifier.height(24.dp))
                     }
 
-                    // Live data Rows
-                    item { InfoRow(Icons.Default.DirectionsBus, "Station", "Building \"Something\"") } // Placeholder for now
+                    // Live data Rows (All Linked)
+                    item { InfoRow(Icons.Default.DirectionsBus, "Station", currentStation) } // 🟢 Linked
                     item { InfoRow(Icons.Default.Navigation, "Heading Direction", bearing) } // 🟢 Linked
                     item { InfoRow(Icons.Default.LocationSearching, "Accuracy", accuracy) } // 🟢 Linked
                     item { InfoRow(Icons.Default.Schedule, "Last Update", lastUpdate) } // 🟢 Linked
