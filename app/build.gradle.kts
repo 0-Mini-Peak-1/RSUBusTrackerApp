@@ -7,13 +7,13 @@ plugins {
 }
 
 android {
-    namespace = "com.example.rsubustrackerapp"
+    namespace = "com.rsubustracker.app"
     compileSdk {
         version = release(36)
     }
 
     defaultConfig {
-        applicationId = "com.example.rsubustrackerapp"
+        applicationId = "com.rsubustracker.app"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
@@ -74,4 +74,5 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-gson:3.0.0")
     // GPS Permission
     implementation("com.google.android.gms:play-services-location:21.0.1")
+    implementation("io.socket:socket.io-client:2.1.2")
 }

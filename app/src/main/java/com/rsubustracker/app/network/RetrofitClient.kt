@@ -1,10 +1,10 @@
-package com.example.rsubustrackerapp
+package com.rsubustracker.app.network
 
+import com.rsubustracker.app.BuildConfig
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 
 object RetrofitClient {
-    // SPECIAL IP FOR EMULATOR
     private const val BASE_URL = BuildConfig.BASE_URL
 
     val instance: ApiService by lazy {

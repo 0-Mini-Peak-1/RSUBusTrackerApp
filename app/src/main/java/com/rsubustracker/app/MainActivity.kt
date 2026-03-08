@@ -1,6 +1,5 @@
-package com.example.rsubustrackerapp
+package com.rsubustracker.app
 
-import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -10,13 +9,15 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
+import com.rsubustracker.app.ui.screens.LoginScreen
+import com.rsubustracker.app.ui.screens.TrackerScreen
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         // Check for saved data (Auto-Login)
-        val sharedPref = getSharedPreferences("BusTrackerPrefs", Context.MODE_PRIVATE)
+        val sharedPref = getSharedPreferences("BusTrackerPrefs", MODE_PRIVATE)
         val savedVehicleId = sharedPref.getString("CURRENT_VEHICLE_ID", null)
         val initialLoginState = savedVehicleId != null // True if ID was found
 

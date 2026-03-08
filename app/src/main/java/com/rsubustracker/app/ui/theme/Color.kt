@@ -1,4 +1,4 @@
-package com.example.rsubustrackerapp.ui.theme
+package com.rsubustracker.app.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

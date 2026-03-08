@@ -1,4 +1,4 @@
-package com.example.rsubustrackerapp
+package com.rsubustracker.app.ui.screens
 
 import android.Manifest
 import android.content.Context
@@ -23,11 +23,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.rsubustracker.app.location.LocationClient
+import com.rsubustracker.app.network.RetrofitClient
+import com.rsubustracker.app.network.StartTripRequest
+import com.rsubustracker.app.network.StartTripResponse
+import com.rsubustracker.app.network.StatusRequest
+import com.rsubustracker.app.network.Stop
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -51,7 +58,6 @@ fun TrackerScreen(onBackClick: () -> Unit) {
     // Live data states
     var stopsList by remember { mutableStateOf<List<Stop>>(emptyList()) }
     var currentStation by remember { mutableStateOf("En Route") }
-    var isTracking by remember { mutableStateOf(false) }
     var latitude by remember { mutableStateOf("0.0") }
     var longitude by remember { mutableStateOf("0.0") }
     var speed by remember { mutableStateOf("0 km/h") }
@@ -59,6 +65,11 @@ fun TrackerScreen(onBackClick: () -> Unit) {
     var accuracy by remember { mutableStateOf("0 m") }
     var lastUpdate by remember { mutableStateOf("-") }
     var timeElapsed by remember { mutableStateOf("0 s") }
+
+    // Store the active trip ID from the backend
+    val savedTripId = sharedPref.getString("ACTIVE_TRIP_ID", "") ?: ""
+    var activeTripId by remember { mutableStateOf("") }
+    var isTracking by remember { mutableStateOf(activeTripId.isNotBlank()) }
 
     // Timer state
     var timeElapsedSeconds by remember { mutableLongStateOf(0L) }
@@ -92,41 +103,37 @@ fun TrackerScreen(onBackClick: () -> Unit) {
     }
 
     // Stops Helper
-    fun checkNearestStop(currentLat: Double, currentLng: Double) {
-        val detectionRadius = 50.0 // meters (Threshold)
-        var foundStop = "En Route" // Default if no stop matches
+    // Pass the whole Location object
+    fun checkNearestStop(location: Location): String {
+        // 1. Filter out bad GPS spikes. If accuracy is worse than 25 meters, ignore it.
+        if (location.accuracy > 25.0) return currentStation
+
+        // 2. Shrink the radius! 20 meters is much better for closely packed campus stops.
+        val detectionRadius = 20.0
+
+        var foundStop = "En Route"
+        var shortestDistance = Float.MAX_VALUE
 
         for (stop in stopsList) {
             val results = FloatArray(1)
-            // Android's built-in math to calculate distance in meters
-            Location.distanceBetween(currentLat, currentLng, stop.lat, stop.lng, results)
+            Location.distanceBetween(location.latitude, location.longitude, stop.lat, stop.lng, results)
             val distanceInMeters = results[0]
 
-            if (distanceInMeters <= detectionRadius) {
-                foundStop = stop.nameEn // Or stop.nameTh
-                break // Found one, stop searching
+            // 3. Find the ABSOLUTE closest stop within the radius
+            if (distanceInMeters <= detectionRadius && distanceInMeters < shortestDistance) {
+
+                // 4. The Speed Check: location.speed is in meters/second.
+                // 2.5 m/s is about 9 km/h. If they are going faster than that, they haven't stopped!
+                if (location.speed <= 2.5) {
+                    shortestDistance = distanceInMeters
+                    foundStop = stop.nameEn // Or stop.nameTh
+                }
             }
         }
-        currentStation = foundStop
-    }
 
-    // Backend Helper
-    fun setVehicleStatus(status: String) {
-        if (vehicleId.isNotBlank()) {
-            val request = StatusRequest(status = status)
-            RetrofitClient.instance.updateStatus(vehicleId, request).enqueue(object : Callback<Void> {
-                override fun onResponse(call: Call<Void>, response: Response<Void>) {
-                    if (response.isSuccessful) {
-                        println("Status updated to: $status")
-                    } else {
-                        println("Failed to update status")
-                    }
-                }
-                override fun onFailure(call: Call<Void>, t: Throwable) {
-                    println("Error: ${t.message}")
-                }
-            })
-        }
+        // Only update the state if we actually processed it
+        currentStation = foundStop
+        return foundStop
     }
 
     // Helper to format seconds -> HH:MM:SS
@@ -150,19 +157,47 @@ fun TrackerScreen(onBackClick: () -> Unit) {
     ) { permissions ->
         if (permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true) {
             // Permission Granted: Start the Engine immediately
-            isTracking = true
-            locationClient.startLocationUpdates { location ->
-                // Update UI variables
-                latitude = location.latitude.toString()
-                longitude = location.longitude.toString()
-                speed = "${(location.speed * 3.6).toInt()} km/h" // Convert m/s to km/h
-                bearing = "${location.bearing}°"
-                accuracy = "${location.accuracy} m"
-                lastUpdate = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-                // Load stops
-                checkNearestStop(location.latitude, location.longitude)
+            val request = StartTripRequest(vehicleId = vehicleId)
+            RetrofitClient.instance.startTrip(request).enqueue(object : Callback<StartTripResponse> {
+                override fun onResponse(call: Call<StartTripResponse>, response: Response<StartTripResponse>) {
 
-            }
+                    val newTripId = response.body()?.trip?.id
+                    if (response.isSuccessful && !newTripId.isNullOrBlank()) {
+                        activeTripId = newTripId
+                        isTracking = true
+
+                        locationClient.startLocationUpdates(vehicleId, activeTripId) { location ->
+                            // Update UI variables
+                            latitude = location.latitude.toString()
+                            longitude = location.longitude.toString()
+                            speed = "${(location.speed * 3.6).toInt()} km/h" // Convert m/s to km/h
+                            bearing = "${location.bearing}°"
+                            accuracy = "${location.accuracy} m"
+                            lastUpdate = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+
+                            // Calculate the stop and capture the result
+                            val calculatedStation = checkNearestStop(location)
+
+                            // Fire the Socket.IO event with the newly calculated station
+                            locationClient.socketManager.sendLocationUpdate(
+                                tripId = activeTripId,
+                                busId = vehicleId,
+                                lat = location.latitude,
+                                lng = location.longitude,
+                                speed = location.speed,
+                                bearing = location.bearing,
+                                accuracy = location.accuracy,
+                                station = calculatedStation
+                            )
+                        }
+                    } else {
+                        println("Failed to parse trip ID. Response was: ${response.code()}")
+                    }
+                }
+                override fun onFailure(call: Call<StartTripResponse>, t: Throwable) {
+                    println("Failed to start trip: ${t.message}")
+                }
+            })
         } else {
             // Permission Denied
             isTracking = false
@@ -197,7 +232,14 @@ fun TrackerScreen(onBackClick: () -> Unit) {
             onClick = {
                 if (isTracking) {
                     locationClient.stopLocationUpdates()
-                    setVehicleStatus("inactive")
+
+                    // End the trip when pressing back
+                    if (activeTripId.isNotBlank()) {
+                        RetrofitClient.instance.endTrip(activeTripId).enqueue(object : Callback<Void> {
+                            override fun onResponse(call: Call<Void>, response: Response<Void>) {}
+                            override fun onFailure(call: Call<Void>, t: Throwable) {}
+                        })
+                    }
                 }
                 onBackClick()
             },
@@ -255,19 +297,47 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                                     if (!isTracking) {
                                         // Check Permission
                                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                                            isTracking = true
-                                            setVehicleStatus("active")
-                                            locationClient.startLocationUpdates { location ->
-                                                latitude = location.latitude.toString()
-                                                longitude = location.longitude.toString()
-                                                speed = "${(location.speed * 3.6).toInt()} km/h"
-                                                bearing = "${location.bearing}°"
-                                                accuracy = "${location.accuracy} m"
-                                                lastUpdate = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-                                                // Load stops
-                                                checkNearestStop(location.latitude, location.longitude)
 
-                                            }
+                                            // Ask backend for a Trip ID first
+                                            val request = StartTripRequest(vehicleId = vehicleId)
+                                            RetrofitClient.instance.startTrip(request).enqueue(object : Callback<StartTripResponse> {
+                                                override fun onResponse(call: Call<StartTripResponse>, response: Response<StartTripResponse>) {
+
+                                                    val newTripId = response.body()?.trip?.id
+                                                    if (response.isSuccessful && !newTripId.isNullOrBlank()) {
+                                                        activeTripId = newTripId
+                                                        isTracking = true
+                                                        locationClient.startLocationUpdates(vehicleId, activeTripId) { location ->
+                                                            latitude = location.latitude.toString()
+                                                            longitude = location.longitude.toString()
+                                                            speed = "${(location.speed * 3.6).toInt()} km/h"
+                                                            bearing = "${location.bearing}°"
+                                                            accuracy = "${location.accuracy} m"
+                                                            lastUpdate = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+
+                                                            // Calculate the stop and capture the result
+                                                            val calculatedStation = checkNearestStop(location)
+
+                                                            // Fire the Socket.IO event with the newly calculated station
+                                                            locationClient.socketManager.sendLocationUpdate(
+                                                                tripId = activeTripId,
+                                                                busId = vehicleId,
+                                                                lat = location.latitude,
+                                                                lng = location.longitude,
+                                                                speed = location.speed,
+                                                                bearing = location.bearing,
+                                                                accuracy = location.accuracy,
+                                                                station = calculatedStation
+                                                            )
+                                                        }
+                                                    } else {
+                                                        println("Failed to parse trip ID. Response was: ${response.code()}")
+                                                    }
+                                                }
+                                                override fun onFailure(call: Call<StartTripResponse>, t: Throwable) {
+                                                    println("Failed to start trip: ${t.message}")
+                                                }
+                                            })
                                         } else {
                                             // Ask for Permission
                                             permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
@@ -291,10 +361,24 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                                 onClick = {
                                     isTracking = false
                                     timeElapsedSeconds = 0 // Reset timer
-                                    setVehicleStatus("inactive")
                                     locationClient.stopLocationUpdates()
                                     // Optional: Reset values or keep last known location
                                     speed = "0 km/h"
+
+                                    // Tell backend the trip is over
+                                    if (activeTripId.isNotBlank()) {
+                                        RetrofitClient.instance.endTrip(activeTripId).enqueue(object : Callback<Void> {
+                                            override fun onResponse(call: Call<Void>, response: Response<Void>) {
+                                                if (response.isSuccessful) {
+                                                    println("Successfully ended trip: $activeTripId")
+                                                    activeTripId = "" // Clear the ID
+                                                }
+                                            }
+                                            override fun onFailure(call: Call<Void>, t: Throwable) {
+                                                println("Failed to end trip: ${t.message}")
+                                            }
+                                        })
+                                    }
                                 },
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFEBEE)),
                                 shape = RoundedCornerShape(12.dp),
@@ -307,13 +391,13 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                     }
 
                     // Live data Rows (All Linked)
-                    item { InfoRow(Icons.Default.DirectionsBus, "Station", currentStation) } // 🟢 Linked
-                    item { InfoRow(Icons.Default.Navigation, "Heading Direction", bearing) } // 🟢 Linked
-                    item { InfoRow(Icons.Default.LocationSearching, "Accuracy", accuracy) } // 🟢 Linked
-                    item { InfoRow(Icons.Default.Schedule, "Last Update", lastUpdate) } // 🟢 Linked
-                    item { InfoRow(Icons.Default.Info, "Ongoing Speed", speed) } // 🟢 Linked
-                    item { InfoRow(Icons.Default.Place, "Latitude", latitude) } // 🟢 Linked
-                    item { InfoRow(Icons.Default.Place, "Longitude", longitude) } // 🟢 Linked
+                    item { InfoRow(Icons.Default.DirectionsBus, "Station", currentStation) }
+                    item { InfoRow(Icons.Default.Navigation, "Heading Direction", bearing) }
+                    item { InfoRow(Icons.Default.LocationSearching, "Accuracy", accuracy) }
+                    item { InfoRow(Icons.Default.Schedule, "Last Update", lastUpdate) }
+                    item { InfoRow(Icons.Default.Info, "Ongoing Speed", speed) }
+                    item { InfoRow(Icons.Default.Place, "Latitude", latitude) }
+                    item { InfoRow(Icons.Default.Place, "Longitude", longitude) }
                     item {
                         InfoRow(Icons.Default.DateRange, "Time Elapsed", formatTime(timeElapsedSeconds))
                         Spacer(modifier = Modifier.height(50.dp))
@@ -353,7 +437,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
 
 @Composable
 fun InfoRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     title: String,
     value: String
 ) {
