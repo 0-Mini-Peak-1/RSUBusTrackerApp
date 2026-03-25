@@ -3,7 +3,6 @@ package com.rsubustracker.app.ui.screens
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.location.Location
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
@@ -29,11 +28,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import com.rsubustracker.app.location.LocationClient
 import com.rsubustracker.app.network.RetrofitClient
 import com.rsubustracker.app.network.StartTripRequest
 import com.rsubustracker.app.network.StartTripResponse
-import com.rsubustracker.app.network.StatusRequest
 import com.rsubustracker.app.network.Stop
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -42,6 +39,12 @@ import java.util.Locale
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
+import android.content.Intent
+import com.rsubustracker.app.location.TrackingService
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
+import android.os.Build
+import androidx.compose.runtime.DisposableEffect
 
 @Composable
 fun TrackerScreen(onBackClick: () -> Unit) {
@@ -64,12 +67,73 @@ fun TrackerScreen(onBackClick: () -> Unit) {
     var bearing by remember { mutableStateOf("0.0°") }
     var accuracy by remember { mutableStateOf("0 m") }
     var lastUpdate by remember { mutableStateOf("-") }
-    var timeElapsed by remember { mutableStateOf("0 s") }
+
+    // This listens for the data from the TrackingService
+    DisposableEffect(context) {
+        val locationReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == "LOCATION_UPDATE") {
+                    // Grab ALL the raw data sent by the Service
+                    val lat = intent.getDoubleExtra("lat", 0.0)
+                    val lng = intent.getDoubleExtra("lng", 0.0)
+                    val spd = intent.getFloatExtra("speed", 0f)
+                    val brg = intent.getFloatExtra("bearing", 0f)
+                    val acc = intent.getFloatExtra("accuracy", 0f)
+                    val incomingStationId = intent.getStringExtra("stationId") ?: ""
+
+                    // Update ALL UI text variables
+                    latitude = lat.toString()
+                    longitude = lng.toString()
+                    speed = "${(spd * 3.6).toInt()} km/h" // Convert m/s to km/h
+                    bearing = "${brg}°"
+                    accuracy = "${acc} m"
+                    lastUpdate = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+
+                    // Find the matching Stop Name for the UI
+                    if (incomingStationId.isNotBlank()) {
+                        val matchedStop = stopsList.find { it.id == incomingStationId }
+                        currentStation = matchedStop?.nameEn ?: "En Route"
+                    } else {
+                        currentStation = "En Route"
+                    }
+                }
+            }
+        }
+
+        // Register the receiver
+        ContextCompat.registerReceiver(
+            context,
+            locationReceiver,
+            IntentFilter("LOCATION_UPDATE"),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+
+        // Clean up the listener when the screen is destroyed
+        onDispose {
+            context.unregisterReceiver(locationReceiver)
+        }
+    }
 
     // Store the active trip ID from the backend
     val savedTripId = sharedPref.getString("ACTIVE_TRIP_ID", "") ?: ""
-    var activeTripId by remember { mutableStateOf("") }
+    var activeTripId by remember { mutableStateOf(savedTripId) }
     var isTracking by remember { mutableStateOf(activeTripId.isNotBlank()) }
+
+    // Crash recovery
+    LaunchedEffect(Unit) {
+        // If we open the app and there is an ID, it means the system crashed us!
+        if (activeTripId.isNotBlank() && vehicleId.isNotBlank()) {
+            println("Recovered from system kill! Resuming service for trip: $activeTripId")
+
+            // Instantly start the background service back up
+            val intent = Intent(context, TrackingService::class.java).apply {
+                action = "ACTION_START"
+                putExtra("EXTRA_TRIP_ID", activeTripId)
+                putExtra("EXTRA_VEHICLE_ID", vehicleId)
+            }
+            ContextCompat.startForegroundService(context, intent)
+        }
+    }
 
     // Timer state
     var timeElapsedSeconds by remember { mutableLongStateOf(0L) }
@@ -102,40 +166,6 @@ fun TrackerScreen(onBackClick: () -> Unit) {
         })
     }
 
-    // Stops Helper
-    // Pass the whole Location object
-    fun checkNearestStop(location: Location): String {
-        // 1. Filter out bad GPS spikes. If accuracy is worse than 25 meters, ignore it.
-        if (location.accuracy > 25.0) return currentStation
-
-        // 2. Shrink the radius! 20 meters is much better for closely packed campus stops.
-        val detectionRadius = 20.0
-
-        var foundStop = "En Route"
-        var shortestDistance = Float.MAX_VALUE
-
-        for (stop in stopsList) {
-            val results = FloatArray(1)
-            Location.distanceBetween(location.latitude, location.longitude, stop.lat, stop.lng, results)
-            val distanceInMeters = results[0]
-
-            // 3. Find the ABSOLUTE closest stop within the radius
-            if (distanceInMeters <= detectionRadius && distanceInMeters < shortestDistance) {
-
-                // 4. The Speed Check: location.speed is in meters/second.
-                // 2.5 m/s is about 9 km/h. If they are going faster than that, they haven't stopped!
-                if (location.speed <= 2.5) {
-                    shortestDistance = distanceInMeters
-                    foundStop = stop.nameEn // Or stop.nameTh
-                }
-            }
-        }
-
-        // Only update the state if we actually processed it
-        currentStation = foundStop
-        return foundStop
-    }
-
     // Helper to format seconds -> HH:MM:SS
     fun formatTime(seconds: Long): String {
         val h = seconds / 3600
@@ -148,15 +178,18 @@ fun TrackerScreen(onBackClick: () -> Unit) {
         }
     }
 
-    // Engine (LocationClient)
-    val locationClient = remember { LocationClient(context) }
-
     // Permission Launcher
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
+        // Check if they granted location
         if (permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true) {
-            // Permission Granted: Start the Engine immediately
+            // Start service preparation
+            val prepIntent = Intent(context, TrackingService::class.java).apply {
+                action = "ACTION_PREPARE"
+            }
+            ContextCompat.startForegroundService(context, prepIntent)
+
             val request = StartTripRequest(vehicleId = vehicleId)
             RetrofitClient.instance.startTrip(request).enqueue(object : Callback<StartTripResponse> {
                 override fun onResponse(call: Call<StartTripResponse>, response: Response<StartTripResponse>) {
@@ -166,36 +199,27 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                         activeTripId = newTripId
                         isTracking = true
 
-                        locationClient.startLocationUpdates(vehicleId, activeTripId) { location ->
-                            // Update UI variables
-                            latitude = location.latitude.toString()
-                            longitude = location.longitude.toString()
-                            speed = "${(location.speed * 3.6).toInt()} km/h" // Convert m/s to km/h
-                            bearing = "${location.bearing}°"
-                            accuracy = "${location.accuracy} m"
-                            lastUpdate = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                        // Save to storage to survive screen rotation
+                        sharedPref.edit().putString("ACTIVE_TRIP_ID", activeTripId).apply()
 
-                            // Calculate the stop and capture the result
-                            val calculatedStation = checkNearestStop(location)
-
-                            // Fire the Socket.IO event with the newly calculated station
-                            locationClient.socketManager.sendLocationUpdate(
-                                tripId = activeTripId,
-                                busId = vehicleId,
-                                lat = location.latitude,
-                                lng = location.longitude,
-                                speed = location.speed,
-                                bearing = location.bearing,
-                                accuracy = location.accuracy,
-                                station = calculatedStation
-                            )
+                        // Tell the service to start
+                        val intent = Intent(context, TrackingService::class.java).apply {
+                            action = "ACTION_START"
+                            putExtra("EXTRA_TRIP_ID", activeTripId)
+                            putExtra("EXTRA_VEHICLE_ID", vehicleId)
                         }
+                        ContextCompat.startForegroundService(context, intent)
+
                     } else {
                         println("Failed to parse trip ID. Response was: ${response.code()}")
+                        val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
+                        context.startService(stopIntent)
                     }
                 }
                 override fun onFailure(call: Call<StartTripResponse>, t: Throwable) {
                     println("Failed to start trip: ${t.message}")
+                    val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
+                    context.startService(stopIntent)
                 }
             })
         } else {
@@ -231,9 +255,13 @@ fun TrackerScreen(onBackClick: () -> Unit) {
         IconButton(
             onClick = {
                 if (isTracking) {
-                    locationClient.stopLocationUpdates()
+                    // Kill the zombie service
+                    val intent = Intent(context, TrackingService::class.java).apply {
+                        action = "ACTION_STOP"
+                    }
+                    context.startService(intent)
 
-                    // End the trip when pressing back
+                    // End the trip in the database
                     if (activeTripId.isNotBlank()) {
                         RetrofitClient.instance.endTrip(activeTripId).enqueue(object : Callback<Void> {
                             override fun onResponse(call: Call<Void>, response: Response<Void>) {}
@@ -241,7 +269,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                         })
                     }
                 }
-                onBackClick()
+                onBackClick() // Navigate back
             },
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -273,7 +301,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                 .padding(top = 120.dp)
                 .offset(y = cardOffsetY.value.dp)
         ) {
-            // 1. The Main White Card (The Body)
+            // The Main White Card (The Body)
             Surface(
                 modifier = Modifier
                     .fillMaxSize()
@@ -281,7 +309,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                 shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
                 color = Color.White
             ) {
-                // 2. SCROLLABLE LIST
+                // SCROLLABLE LIST
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxSize()
@@ -297,50 +325,61 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                                     if (!isTracking) {
                                         // Check Permission
                                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-
+                                            // Start service preparation
+                                            val prepIntent = Intent(context, TrackingService::class.java).apply {
+                                                action = "ACTION_PREPARE"
+                                            }
+                                            ContextCompat.startForegroundService(context, prepIntent)
                                             // Ask backend for a Trip ID first
                                             val request = StartTripRequest(vehicleId = vehicleId)
                                             RetrofitClient.instance.startTrip(request).enqueue(object : Callback<StartTripResponse> {
                                                 override fun onResponse(call: Call<StartTripResponse>, response: Response<StartTripResponse>) {
 
                                                     val newTripId = response.body()?.trip?.id
+
                                                     if (response.isSuccessful && !newTripId.isNullOrBlank()) {
                                                         activeTripId = newTripId
                                                         isTracking = true
-                                                        locationClient.startLocationUpdates(vehicleId, activeTripId) { location ->
-                                                            latitude = location.latitude.toString()
-                                                            longitude = location.longitude.toString()
-                                                            speed = "${(location.speed * 3.6).toInt()} km/h"
-                                                            bearing = "${location.bearing}°"
-                                                            accuracy = "${location.accuracy} m"
-                                                            lastUpdate = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
 
-                                                            // Calculate the stop and capture the result
-                                                            val calculatedStation = checkNearestStop(location)
+                                                        // Save to storage to survive screen rotation
+                                                        sharedPref.edit().putString("ACTIVE_TRIP_ID", activeTripId).apply()
 
-                                                            // Fire the Socket.IO event with the newly calculated station
-                                                            locationClient.socketManager.sendLocationUpdate(
-                                                                tripId = activeTripId,
-                                                                busId = vehicleId,
-                                                                lat = location.latitude,
-                                                                lng = location.longitude,
-                                                                speed = location.speed,
-                                                                bearing = location.bearing,
-                                                                accuracy = location.accuracy,
-                                                                station = calculatedStation
-                                                            )
+                                                        val intent = Intent(context, TrackingService::class.java).apply {
+                                                            action = "ACTION_START"
+                                                            putExtra("EXTRA_TRIP_ID", activeTripId)
+                                                            putExtra("EXTRA_VEHICLE_ID", vehicleId)
                                                         }
+                                                        ContextCompat.startForegroundService(context, intent)
                                                     } else {
                                                         println("Failed to parse trip ID. Response was: ${response.code()}")
+                                                        val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
+                                                        context.startService(stopIntent)
                                                     }
                                                 }
                                                 override fun onFailure(call: Call<StartTripResponse>, t: Throwable) {
                                                     println("Failed to start trip: ${t.message}")
+                                                    val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
+                                                    context.startService(stopIntent)
                                                 }
                                             })
                                         } else {
                                             // Ask for Permission
-                                            permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                                permissionLauncher.launch(
+                                                    arrayOf(
+                                                        Manifest.permission.ACCESS_FINE_LOCATION,
+                                                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                                                        Manifest.permission.POST_NOTIFICATIONS // <-- Asks for the notification!
+                                                    )
+                                                )
+                                            } else {
+                                                permissionLauncher.launch(
+                                                    arrayOf(
+                                                        Manifest.permission.ACCESS_FINE_LOCATION,
+                                                        Manifest.permission.ACCESS_COARSE_LOCATION
+                                                    )
+                                                )
+                                            }
                                         }
                                     }
                                 },
@@ -348,7 +387,9 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                                     containerColor = if (isTracking) Color(0xFFE8F5E9) else Color(0xFFF3E5F5)
                                 ),
                                 shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.weight(1f).padding(end = 8.dp)
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(end = 8.dp)
                             ) {
                                 Text(
                                     if (isTracking) "Active" else "Activate GPS",
@@ -359,32 +400,47 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                             // DEACTIVATE BUTTON
                             Button(
                                 onClick = {
-                                    isTracking = false
-                                    timeElapsedSeconds = 0 // Reset timer
-                                    locationClient.stopLocationUpdates()
-                                    // Optional: Reset values or keep last known location
-                                    speed = "0 km/h"
-
-                                    // Tell backend the trip is over
-                                    if (activeTripId.isNotBlank()) {
-                                        RetrofitClient.instance.endTrip(activeTripId).enqueue(object : Callback<Void> {
-                                            override fun onResponse(call: Call<Void>, response: Response<Void>) {
-                                                if (response.isSuccessful) {
-                                                    println("Successfully ended trip: $activeTripId")
-                                                    activeTripId = "" // Clear the ID
+                                    if (isTracking) {
+                                        // Tell backend the trip is over
+                                        if (activeTripId.isNotBlank()) {
+                                            RetrofitClient.instance.endTrip(activeTripId).enqueue(object : Callback<Void> {
+                                                override fun onResponse(call: Call<Void>, response: Response<Void>) {
+                                                    if (response.isSuccessful) {
+                                                        println("Successfully ended trip: $activeTripId")
+                                                        activeTripId = "" // Clear the ID only AFTER success
+                                                    }
                                                 }
-                                            }
-                                            override fun onFailure(call: Call<Void>, t: Throwable) {
-                                                println("Failed to end trip: ${t.message}")
-                                            }
-                                        })
+                                                override fun onFailure(call: Call<Void>, t: Throwable) {
+                                                    println("Failed to end trip: ${t.message}")
+                                                }
+                                            })
+                                        }
+
+                                        // Tell the background zombie service to shut down
+                                        val intent = Intent(context, TrackingService::class.java).apply {
+                                            action = "ACTION_STOP"
+                                        }
+                                        context.startService(intent)
+
+                                        // Reset the UI state
+                                        isTracking = false
+                                        timeElapsedSeconds = 0
+                                        speed = "0 km/h"
+
+                                        // Delete from memory so it doesn't auto-start
+                                        sharedPref.edit().remove("ACTIVE_TRIP_ID").apply()
                                     }
                                 },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFEBEE)),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (!isTracking) Color(0xFFFFEBEE) else Color(0xFFF3E5F5)
+                                ),
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.weight(1f).padding(start = 8.dp)
                             ) {
-                                Text("Deactivate GPS", color = Color(0xFFC62828))
+                                Text(
+                                    if (!isTracking) "Inactive" else "Deactivate GPS",
+                                    color = if (!isTracking) Color(0xFFC62828) else Color(0xFF6A1B9A)
+                                )
                             }
                         }
                         Spacer(modifier = Modifier.height(24.dp))
@@ -415,7 +471,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                     .background(Color.White)
             )
 
-            // 3. The "Tracker Menu" Label
+            // The "Tracker Menu" Label
             Surface(
                 modifier = Modifier
                     .padding(start = 24.dp),
