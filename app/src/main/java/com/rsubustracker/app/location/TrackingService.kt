@@ -10,6 +10,8 @@ import android.os.Build
 import android.location.Location
 import android.os.IBinder
 import android.os.Looper
+import android.graphics.Color
+import android.R
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.google.android.gms.location.*
@@ -116,13 +118,28 @@ class TrackingService : Service() {
                 tripId = intent.getStringExtra("EXTRA_TRIP_ID") ?: ""
                 vehicleId = intent.getStringExtra("EXTRA_VEHICLE_ID") ?: ""
 
+                val stopIntent = Intent(this, TrackingService::class.java).apply {
+                    this.action = "ACTION_STOP"
+                }
+                val stopPendingIntent = PendingIntent.getService(
+                    this,
+                    1, // Use a different request code (1) than the main notification (0)
+                    stopIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+
                 // Start the un-swipeable foreground notification
                 val notification = NotificationCompat.Builder(this, CHANNEL_ID)
                     .setContentTitle("RSU Shuttle Tracker")
                     .setContentText("Actively broadcasting GPS to the server...")
+                    .setColor(Color.parseColor("#E91E63"))
+                    .setSubText("Status: Online")
+                    .setUsesChronometer(true)
+                    .setShowWhen(true)
                     .setSmallIcon(android.R.drawable.ic_menu_mylocation)
                     .setOngoing(true)
                     .setContentIntent(pendingIntent)
+                    .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop GPS Tracking", stopPendingIntent)
                     .build()
 
                 // Tell Android exactly what kind of service this is so it doesn't hide it
@@ -137,6 +154,20 @@ class TrackingService : Service() {
                 startLocationUpdates()
             }
             "ACTION_STOP" -> {
+                Log.d("TrackingService", "Stop command received via Notification Button")
+
+                val stopBroadcast = Intent("ACTION_TRACKING_STOPPED").apply {
+                    setPackage(packageName)
+                }
+                sendBroadcast(stopBroadcast)
+
+                if (tripId.isNotBlank()) {
+                    RetrofitClient.instance.endTrip(tripId).enqueue(object : Callback<Void> {
+                        override fun onResponse(call: Call<Void>, response: Response<Void>) {}
+                        override fun onFailure(call: Call<Void>, t: Throwable) {}
+                    })
+                }
+
                 // Clean everything up
                 if (::fusedLocationClient.isInitialized && ::locationCallback.isInitialized) {
                     fusedLocationClient.removeLocationUpdates(locationCallback)

@@ -45,6 +45,11 @@ import android.content.BroadcastReceiver
 import android.content.IntentFilter
 import android.os.Build
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.shape.CircleShape
 
 @Composable
 fun TrackerScreen(onBackClick: () -> Unit) {
@@ -67,6 +72,14 @@ fun TrackerScreen(onBackClick: () -> Unit) {
     var bearing by remember { mutableStateOf("0.0°") }
     var accuracy by remember { mutableStateOf("0 m") }
     var lastUpdate by remember { mutableStateOf("-") }
+
+    // Store the active trip ID from the backend
+    val savedTripId = sharedPref.getString("ACTIVE_TRIP_ID", "") ?: ""
+    var activeTripId by remember { mutableStateOf(savedTripId) }
+    var isTracking by remember { mutableStateOf(activeTripId.isNotBlank()) }
+
+    // Timer state
+    var timeElapsedSeconds by remember { mutableLongStateOf(0L) }
 
     // This listens for the data from the TrackingService
     DisposableEffect(context) {
@@ -97,14 +110,26 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                         currentStation = "En Route"
                     }
                 }
+
+                if (intent?.action == "ACTION_TRACKING_STOPPED") {
+                    isTracking = false
+                    timeElapsedSeconds = 0
+                    speed = "0 km/h"
+                    sharedPref.edit().remove("ACTIVE_TRIP_ID").apply()
+                }
             }
+        }
+
+        val filter = IntentFilter().apply {
+            addAction("LOCATION_UPDATE")
+            addAction("ACTION_TRACKING_STOPPED")
         }
 
         // Register the receiver
         ContextCompat.registerReceiver(
             context,
             locationReceiver,
-            IntentFilter("LOCATION_UPDATE"),
+            filter,
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
 
@@ -113,11 +138,6 @@ fun TrackerScreen(onBackClick: () -> Unit) {
             context.unregisterReceiver(locationReceiver)
         }
     }
-
-    // Store the active trip ID from the backend
-    val savedTripId = sharedPref.getString("ACTIVE_TRIP_ID", "") ?: ""
-    var activeTripId by remember { mutableStateOf(savedTripId) }
-    var isTracking by remember { mutableStateOf(activeTripId.isNotBlank()) }
 
     // Crash recovery
     LaunchedEffect(Unit) {
@@ -134,9 +154,6 @@ fun TrackerScreen(onBackClick: () -> Unit) {
             ContextCompat.startForegroundService(context, intent)
         }
     }
-
-    // Timer state
-    var timeElapsedSeconds by remember { mutableLongStateOf(0L) }
 
     // Timer logic
     LaunchedEffect(isTracking) {
@@ -309,154 +326,133 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                 shape = RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp),
                 color = Color.White
             ) {
-                // SCROLLABLE LIST
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(top = 60.dp, start = 24.dp, end = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // Item 1: The Buttons Row
-                    item {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            // ACTIVATE BUTTON
-                            Button(
-                                onClick = {
-                                    if (!isTracking) {
-                                        // Check Permission
-                                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                                            // Start service preparation
-                                            val prepIntent = Intent(context, TrackingService::class.java).apply {
-                                                action = "ACTION_PREPARE"
-                                            }
-                                            ContextCompat.startForegroundService(context, prepIntent)
-                                            // Ask backend for a Trip ID first
-                                            val request = StartTripRequest(vehicleId = vehicleId)
-                                            RetrofitClient.instance.startTrip(request).enqueue(object : Callback<StartTripResponse> {
-                                                override fun onResponse(call: Call<StartTripResponse>, response: Response<StartTripResponse>) {
+                Box(modifier = Modifier.fillMaxSize()) {
 
-                                                    val newTripId = response.body()?.trip?.id
+                    // 1. SCROLLABLE LIST
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = 60.dp, start = 24.dp, end = 24.dp),
+                        contentPadding = PaddingValues(bottom = 100.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Live data Rows
+                        item { InfoRow(Icons.Default.DirectionsBus, "Station", currentStation) }
+                        item { InfoRow(Icons.Default.Navigation, "Heading Direction", bearing) }
+                        item { InfoRow(Icons.Default.LocationSearching, "Accuracy", accuracy) }
+                        item { InfoRow(Icons.Default.Schedule, "Last Update", lastUpdate) }
+                        item { InfoRow(Icons.Default.Info, "Ongoing Speed", speed) }
+                        item { InfoRow(Icons.Default.Place, "Latitude", latitude) }
+                        item { InfoRow(Icons.Default.Place, "Longitude", longitude) }
+                        item { InfoRow(Icons.Default.DateRange, "Time Elapsed", formatTime(timeElapsedSeconds)) }
+                    }
 
-                                                    if (response.isSuccessful && !newTripId.isNullOrBlank()) {
-                                                        activeTripId = newTripId
-                                                        isTracking = true
+                    // 2. THE FLOATING MORPHING BUTTON
+                    val buttonColor by animateColorAsState(
+                        targetValue = if (isTracking) Color(0xFFFFEBEE) else Color(0xFFE8F5E9),
+                        animationSpec = tween(durationMillis = 300)
+                    )
+                    val contentColor by animateColorAsState(
+                        targetValue = if (isTracking) Color(0xFFC62828) else Color(0xFF2E7D32),
+                        animationSpec = tween(durationMillis = 300)
+                    )
+                    val buttonWidth by animateDpAsState(
+                        targetValue = if (isTracking) 190.dp else 200.dp,
+                        animationSpec = spring(dampingRatio = 0.7f, stiffness = Spring.StiffnessLow)
+                    )
 
-                                                        // Save to storage to survive screen rotation
-                                                        sharedPref.edit().putString("ACTIVE_TRIP_ID", activeTripId).apply()
+                    // Pin the button to the bottom center of the screen
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .padding(bottom = 32.dp ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Button(
+                            onClick = {
+                                if (!isTracking) {
+                                    // --- THE START LOGIC ---
+                                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                                        val prepIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_PREPARE" }
+                                        ContextCompat.startForegroundService(context, prepIntent)
 
-                                                        val intent = Intent(context, TrackingService::class.java).apply {
-                                                            action = "ACTION_START"
-                                                            putExtra("EXTRA_TRIP_ID", activeTripId)
-                                                            putExtra("EXTRA_VEHICLE_ID", vehicleId)
-                                                        }
-                                                        ContextCompat.startForegroundService(context, intent)
-                                                    } else {
-                                                        println("Failed to parse trip ID. Response was: ${response.code()}")
-                                                        val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
-                                                        context.startService(stopIntent)
+                                        val request = StartTripRequest(vehicleId = vehicleId)
+                                        RetrofitClient.instance.startTrip(request).enqueue(object : Callback<StartTripResponse> {
+                                            override fun onResponse(call: Call<StartTripResponse>, response: Response<StartTripResponse>) {
+                                                val newTripId = response.body()?.trip?.id
+                                                if (response.isSuccessful && !newTripId.isNullOrBlank()) {
+                                                    activeTripId = newTripId
+                                                    isTracking = true
+                                                    sharedPref.edit().putString("ACTIVE_TRIP_ID", activeTripId).apply()
+
+                                                    val intent = Intent(context, TrackingService::class.java).apply {
+                                                        action = "ACTION_START"
+                                                        putExtra("EXTRA_TRIP_ID", activeTripId)
+                                                        putExtra("EXTRA_VEHICLE_ID", vehicleId)
                                                     }
-                                                }
-                                                override fun onFailure(call: Call<StartTripResponse>, t: Throwable) {
-                                                    println("Failed to start trip: ${t.message}")
+                                                    ContextCompat.startForegroundService(context, intent)
+                                                } else {
                                                     val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
                                                     context.startService(stopIntent)
                                                 }
-                                            })
-                                        } else {
-                                            // Ask for Permission
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                                permissionLauncher.launch(
-                                                    arrayOf(
-                                                        Manifest.permission.ACCESS_FINE_LOCATION,
-                                                        Manifest.permission.ACCESS_COARSE_LOCATION,
-                                                        Manifest.permission.POST_NOTIFICATIONS // <-- Asks for the notification!
-                                                    )
-                                                )
-                                            } else {
-                                                permissionLauncher.launch(
-                                                    arrayOf(
-                                                        Manifest.permission.ACCESS_FINE_LOCATION,
-                                                        Manifest.permission.ACCESS_COARSE_LOCATION
-                                                    )
-                                                )
                                             }
+                                            override fun onFailure(call: Call<StartTripResponse>, t: Throwable) {
+                                                val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
+                                                context.startService(stopIntent)
+                                            }
+                                        })
+                                    } else {
+                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                            permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.POST_NOTIFICATIONS))
+                                        } else {
+                                            permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
                                         }
                                     }
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (isTracking) Color(0xFFE8F5E9) else Color(0xFFF3E5F5)
-                                ),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(end = 8.dp)
-                            ) {
-                                Text(
-                                    if (isTracking) "Active" else "Activate GPS",
-                                    color = if (isTracking) Color(0xFF2E7D32) else Color(0xFF6A1B9A)
-                                )
-                            }
-
-                            // DEACTIVATE BUTTON
-                            Button(
-                                onClick = {
-                                    if (isTracking) {
-                                        // Tell backend the trip is over
-                                        if (activeTripId.isNotBlank()) {
-                                            RetrofitClient.instance.endTrip(activeTripId).enqueue(object : Callback<Void> {
-                                                override fun onResponse(call: Call<Void>, response: Response<Void>) {
-                                                    if (response.isSuccessful) {
-                                                        println("Successfully ended trip: $activeTripId")
-                                                        activeTripId = "" // Clear the ID only AFTER success
-                                                    }
-                                                }
-                                                override fun onFailure(call: Call<Void>, t: Throwable) {
-                                                    println("Failed to end trip: ${t.message}")
-                                                }
-                                            })
-                                        }
-
-                                        // Tell the background zombie service to shut down
-                                        val intent = Intent(context, TrackingService::class.java).apply {
-                                            action = "ACTION_STOP"
-                                        }
-                                        context.startService(intent)
-
-                                        // Reset the UI state
-                                        isTracking = false
-                                        timeElapsedSeconds = 0
-                                        speed = "0 km/h"
-
-                                        // Delete from memory so it doesn't auto-start
-                                        sharedPref.edit().remove("ACTIVE_TRIP_ID").apply()
+                                } else {
+                                    // --- THE STOP LOGIC ---
+                                    if (activeTripId.isNotBlank()) {
+                                        RetrofitClient.instance.endTrip(activeTripId).enqueue(object : Callback<Void> {
+                                            override fun onResponse(call: Call<Void>, response: Response<Void>) {
+                                                if (response.isSuccessful) activeTripId = ""
+                                            }
+                                            override fun onFailure(call: Call<Void>, t: Throwable) {}
+                                        })
                                     }
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = if (!isTracking) Color(0xFFFFEBEE) else Color(0xFFF3E5F5)
-                                ),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.weight(1f).padding(start = 8.dp)
-                            ) {
-                                Text(
-                                    if (!isTracking) "Inactive" else "Deactivate GPS",
-                                    color = if (!isTracking) Color(0xFFC62828) else Color(0xFF6A1B9A)
-                                )
-                            }
+
+                                    val intent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
+                                    context.startService(intent)
+
+                                    isTracking = false
+                                    timeElapsedSeconds = 0
+                                    speed = "0 km/h"
+                                    sharedPref.edit().remove("ACTIVE_TRIP_ID").apply()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = buttonColor),
+                            shape = RoundedCornerShape(16.dp),
+                            elevation = ButtonDefaults.buttonElevation(
+                                defaultElevation = if (isTracking) 2.dp else 8.dp // High shadow so it looks like it's floating!
+                            ),
+                            modifier = Modifier
+                                .width(buttonWidth)
+                                .height(56.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isTracking) Icons.Default.StopCircle else Icons.Default.GpsFixed,
+                                contentDescription = null,
+                                tint = contentColor,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = if (isTracking) "Stop Tracking" else "Start Tracking",
+                                textAlign = TextAlign.Left,
+                                color = contentColor,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp
+                            )
                         }
-                        Spacer(modifier = Modifier.height(24.dp))
-                    }
-
-                    // Live data Rows (All Linked)
-                    item { InfoRow(Icons.Default.DirectionsBus, "Station", currentStation) }
-                    item { InfoRow(Icons.Default.Navigation, "Heading Direction", bearing) }
-                    item { InfoRow(Icons.Default.LocationSearching, "Accuracy", accuracy) }
-                    item { InfoRow(Icons.Default.Schedule, "Last Update", lastUpdate) }
-                    item { InfoRow(Icons.Default.Info, "Ongoing Speed", speed) }
-                    item { InfoRow(Icons.Default.Place, "Latitude", latitude) }
-                    item { InfoRow(Icons.Default.Place, "Longitude", longitude) }
-                    item {
-                        InfoRow(Icons.Default.DateRange, "Time Elapsed", formatTime(timeElapsedSeconds))
-                        Spacer(modifier = Modifier.height(50.dp))
                     }
                 }
             }
@@ -471,21 +467,35 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                     .background(Color.White)
             )
 
-            // The "Tracker Menu" Label
+            // The "Tracker Status" Label
+            val statusColor by animateColorAsState(
+                targetValue = if (isTracking) Color(0xFF2E7D32) else Color(0xFF757575), // Deep Green vs Soft Grey
+                animationSpec = tween(durationMillis = 300)
+            )
+
             Surface(
-                modifier = Modifier
-                    .padding(start = 24.dp),
-                shape = RoundedCornerShape(20.dp),
-                border = BorderStroke(1.dp, Color.Black),
+                modifier = Modifier.padding(start = 24.dp),
+                shape = RoundedCornerShape(percent = 50), // Makes it a perfect pill shape
                 color = Color.White,
-                shadowElevation = 8.dp
+                shadowElevation = 8.dp // Keeps the nice floating shadow
             ) {
-                Text(
-                    text = if (isTracking) "Tracking Activated" else "Tracking Deactivated",
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
-                )
+                Row(
+                    modifier = Modifier.padding(horizontal = 25.dp, vertical = 15.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .background(color = statusColor, shape = CircleShape)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (isTracking) "Tracking Activated" else "Tracking Deactivated",
+                        color = statusColor,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp // Slightly scaled down for a more refined look
+                    )
+                }
             }
         }
     }

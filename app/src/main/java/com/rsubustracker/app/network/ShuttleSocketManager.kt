@@ -20,7 +20,7 @@ class ShuttleSocketManager {
 
             // Listen for successful connection
             socket?.on(Socket.EVENT_CONNECT) {
-                Log.d("SocketIO", "Connected to the tracking server!")
+                Log.d("SocketIO", "Connected to the tracking server")
             }
 
             // Listen for disconnections
