@@ -10,6 +10,11 @@ private const val BASE_URL = BuildConfig.BASE_URL
 
 class ShuttleSocketManager {
     private var socket: Socket? = null
+    private var onLoraUpdateListener: ((JSONObject) -> Unit)? = null
+
+    fun setOnLoraUpdateListener(listener: (JSONObject) -> Unit) {
+        onLoraUpdateListener = listener
+    }
 
     fun connect() {
         try {
@@ -26,6 +31,14 @@ class ShuttleSocketManager {
             // Listen for disconnections
             socket?.on(Socket.EVENT_DISCONNECT) {
                 Log.d("SocketIO", "Disconnected from server")
+            }
+
+            // Listen for LoRaWAN updates from the backend
+            socket?.on("lora-update") { args ->
+                if (args.isNotEmpty()) {
+                    val data = args[0] as JSONObject
+                    onLoraUpdateListener?.invoke(data)
+                }
             }
 
             socket?.connect()

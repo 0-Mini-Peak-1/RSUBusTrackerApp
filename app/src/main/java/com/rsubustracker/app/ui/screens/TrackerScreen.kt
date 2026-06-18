@@ -16,6 +16,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -45,6 +47,7 @@ import android.content.BroadcastReceiver
 import android.content.IntentFilter
 import android.os.Build
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
@@ -73,20 +76,28 @@ fun TrackerScreen(onBackClick: () -> Unit) {
     var accuracy by remember { mutableStateOf("0 m") }
     var lastUpdate by remember { mutableStateOf("-") }
 
+    // LoRa Data States (Remote)
+    var loraLat by remember { mutableStateOf("Waiting...") }
+    var loraLng by remember { mutableStateOf("Waiting...") }
+    var loraLastUpdate by remember { mutableStateOf("-") }
+
+    // Tracking Mode
+    var trackingMode by rememberSaveable { mutableStateOf("both") } // "phone", "lora", "both"
+
     // Store the active trip ID from the backend
     val savedTripId = sharedPref.getString("ACTIVE_TRIP_ID", "") ?: ""
     var activeTripId by remember { mutableStateOf(savedTripId) }
     var isTracking by remember { mutableStateOf(activeTripId.isNotBlank()) }
 
     // Timer state
-    var timeElapsedSeconds by remember { mutableLongStateOf(0L) }
+    var timeElapsedSeconds by rememberSaveable { mutableLongStateOf(0L) }
 
     // This listens for the data from the TrackingService
     DisposableEffect(context) {
         val locationReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (intent?.action == "LOCATION_UPDATE") {
-                    // Grab ALL the raw data sent by the Service
+                    // ... (existing local GPS logic)
                     val lat = intent.getDoubleExtra("lat", 0.0)
                     val lng = intent.getDoubleExtra("lng", 0.0)
                     val spd = intent.getFloatExtra("speed", 0f)
@@ -94,20 +105,33 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                     val acc = intent.getFloatExtra("accuracy", 0f)
                     val incomingStationId = intent.getStringExtra("stationId") ?: ""
 
-                    // Update ALL UI text variables
                     latitude = lat.toString()
                     longitude = lng.toString()
-                    speed = "${(spd * 3.6).toInt()} km/h" // Convert m/s to km/h
+                    speed = "${(spd * 3.6).toInt()} km/h"
                     bearing = "${brg}°"
                     accuracy = "${acc} m"
                     lastUpdate = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
 
-                    // Find the matching Stop Name for the UI
                     if (incomingStationId.isNotBlank()) {
                         val matchedStop = stopsList.find { it.id == incomingStationId }
                         currentStation = matchedStop?.nameEn ?: "En Route"
                     } else {
                         currentStation = "En Route"
+                    }
+                }
+
+                if (intent?.action == "LORA_LOCATION_UPDATE") {
+                    val lat = intent.getDoubleExtra("lat", 0.0)
+                    val lng = intent.getDoubleExtra("lng", 0.0)
+                    val timestamp = intent.getStringExtra("recordedAt") ?: ""
+
+                    loraLat = lat.toString()
+                    loraLng = lng.toString()
+                    loraLastUpdate = if (timestamp.isNotBlank()) {
+                        // Extract time from ISO string or just use current time for simplicity if backend format is weird
+                        SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                    } else {
+                        SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
                     }
                 }
 
@@ -122,6 +146,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
 
         val filter = IntentFilter().apply {
             addAction("LOCATION_UPDATE")
+            addAction("LORA_LOCATION_UPDATE")
             addAction("ACTION_TRACKING_STOPPED")
         }
 
@@ -207,7 +232,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
             }
             ContextCompat.startForegroundService(context, prepIntent)
 
-            val request = StartTripRequest(vehicleId = vehicleId)
+            val request = StartTripRequest(vehicleId = vehicleId, trackingMode = trackingMode)
             RetrofitClient.instance.startTrip(request).enqueue(object : Callback<StartTripResponse> {
                 override fun onResponse(call: Call<StartTripResponse>, response: Response<StartTripResponse>) {
 
@@ -224,6 +249,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                             action = "ACTION_START"
                             putExtra("EXTRA_TRIP_ID", activeTripId)
                             putExtra("EXTRA_VEHICLE_ID", vehicleId)
+                            putExtra("EXTRA_TRACKING_MODE", trackingMode)
                         }
                         ContextCompat.startForegroundService(context, intent)
 
@@ -333,18 +359,48 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(top = 60.dp, start = 24.dp, end = 24.dp),
-                        contentPadding = PaddingValues(bottom = 100.dp),
+                        contentPadding = PaddingValues(bottom = 120.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // Live data Rows
-                        item { InfoRow(Icons.Default.DirectionsBus, "Station", currentStation) }
-                        item { InfoRow(Icons.Default.Navigation, "Heading Direction", bearing) }
-                        item { InfoRow(Icons.Default.LocationSearching, "Accuracy", accuracy) }
-                        item { InfoRow(Icons.Default.Schedule, "Last Update", lastUpdate) }
-                        item { InfoRow(Icons.Default.Info, "Ongoing Speed", speed) }
-                        item { InfoRow(Icons.Default.Place, "Latitude", latitude) }
-                        item { InfoRow(Icons.Default.Place, "Longitude", longitude) }
-                        item { InfoRow(Icons.Default.DateRange, "Time Elapsed", formatTime(timeElapsedSeconds)) }
+                        // 1. TRIP SUMMARY (Always at the top)
+                        item {
+                            SectionHeader("Time", Icons.Default.History)
+                            InfoRow(Icons.Default.Timer, "Time Elapsed", formatTime(timeElapsedSeconds))
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+
+                        // MODE SELECTOR (Only shown when NOT tracking)
+                        if (!isTracking) {
+                            item {
+                                TrackingModeSelector(
+                                    selectedMode = trackingMode,
+                                    onModeSelected = { trackingMode = it }
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                            }
+                        }
+
+                        // --- PHONE DATA SECTION ---
+                        if (trackingMode == "phone" || trackingMode == "both") {
+                            item { SectionHeader("Phone Sensor (Local GPS)", Icons.Default.Smartphone) }
+                            item { InfoRow(Icons.Default.DirectionsBus, "Station", currentStation) }
+                            item { InfoRow(Icons.Default.Navigation, "Heading Direction", bearing) }
+                            item { InfoRow(Icons.Default.LocationSearching, "Accuracy", accuracy) }
+                            item { InfoRow(Icons.Default.Schedule, "Last Update", lastUpdate) }
+                            item { InfoRow(Icons.Default.Info, "Ongoing Speed", speed) }
+                            item { InfoRow(Icons.Default.Place, "Latitude", latitude) }
+                            item { InfoRow(Icons.Default.Place, "Longitude", longitude) }
+                            item { Spacer(modifier = Modifier.height(16.dp)) }
+
+                        }
+
+                        // --- LORA DATA SECTION ---
+                        if (trackingMode == "lora" || trackingMode == "both") {
+                            item { SectionHeader("LoRaWAN Sensor (Remote)", Icons.Default.Sensors) }
+                            item { InfoRow(Icons.Default.Place,"LoRa Latitude", loraLat) }
+                            item { InfoRow(Icons.Default.Place, "LoRa Longitude", loraLng) }
+                            item { InfoRow(Icons.Default.Schedule, "Last LoRa Update", loraLastUpdate) }
+                        }
                     }
 
                     // 2. THE FLOATING MORPHING BUTTON
@@ -377,7 +433,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                                         val prepIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_PREPARE" }
                                         ContextCompat.startForegroundService(context, prepIntent)
 
-                                        val request = StartTripRequest(vehicleId = vehicleId)
+                                        val request = StartTripRequest(vehicleId = vehicleId, trackingMode = trackingMode)
                                         RetrofitClient.instance.startTrip(request).enqueue(object : Callback<StartTripResponse> {
                                             override fun onResponse(call: Call<StartTripResponse>, response: Response<StartTripResponse>) {
                                                 val newTripId = response.body()?.trip?.id
@@ -390,6 +446,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                                                         action = "ACTION_START"
                                                         putExtra("EXTRA_TRIP_ID", activeTripId)
                                                         putExtra("EXTRA_VEHICLE_ID", vehicleId)
+                                                        putExtra("EXTRA_TRACKING_MODE", trackingMode)
                                                     }
                                                     ContextCompat.startForegroundService(context, intent)
                                                 } else {
@@ -495,9 +552,82 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp // Slightly scaled down for a more refined look
                     )
+                    if (isTracking) {
+                        Text(
+                            text = " • ${formatTime(timeElapsedSeconds)}",
+                            color = statusColor,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+fun SectionHeader(title: String, icon: ImageVector) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(vertical = 8.dp)
+    ) {
+        Icon(icon, contentDescription = null, tint = Color(0xFFC43C62), modifier = Modifier.size(20.dp))
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = title,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.ExtraBold,
+            color = Color(0xFFC43C62)
+        )
+    }
+}
+
+@Composable
+fun TrackingModeSelector(selectedMode: String, onModeSelected: (String) -> Unit) {
+    Column {
+        Text(
+            text = "Select Tracking Source",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold,
+            color = Color.Gray,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ModeButton("Phone", "phone", selectedMode, onModeSelected, Modifier.weight(1f))
+            ModeButton("LoRa", "lora", selectedMode, onModeSelected, Modifier.weight(1f))
+            ModeButton("Both", "both", selectedMode, onModeSelected, Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+fun ModeButton(
+    label: String,
+    mode: String,
+    selectedMode: String,
+    onModeSelected: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isSelected = mode == selectedMode
+    OutlinedButton(
+        onClick = { onModeSelected(mode) },
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (isSelected) Color(0xFFE91E63).copy(alpha = 0.1f) else Color.Transparent,
+            contentColor = if (isSelected) Color(0xFFE91E63) else Color.Gray
+        ),
+        border = BorderStroke(
+            width = if (isSelected) 2.dp else 1.dp,
+            color = if (isSelected) Color(0xFFE91E63) else Color.LightGray
+        ),
+        modifier = modifier.height(44.dp),
+        contentPadding = PaddingValues(0.dp)
+    ) {
+        Text(text = label, fontSize = 12.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
     }
 }
 

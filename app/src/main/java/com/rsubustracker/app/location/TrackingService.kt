@@ -37,12 +37,29 @@ class TrackingService : Service() {
 
     private var tripId: String = ""
     private var vehicleId: String = ""
+    private var trackingMode: String = "both" // NEW
     private var stopsList: List<Stop> = emptyList()
 
     override fun onCreate() {
         super.onCreate()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         createNotificationChannel()
+
+        // Handle LoRa updates from the socket
+        socketManager.setOnLoraUpdateListener { data ->
+            val lat = data.optDouble("lat", 0.0)
+            val lng = data.optDouble("lng", 0.0)
+            val recordedAt = data.optString("recordedAt", "")
+
+            // Broadcast to the UI
+            val loraIntent = Intent("LORA_LOCATION_UPDATE").apply {
+                setPackage(packageName)
+                putExtra("lat", lat)
+                putExtra("lng", lng)
+                putExtra("recordedAt", recordedAt)
+            }
+            sendBroadcast(loraIntent)
+        }
 
         // Fetch stop since the service boot up
         RetrofitClient.instance.getStops().enqueue(object : Callback<List<Stop>> {
@@ -117,6 +134,7 @@ class TrackingService : Service() {
                 // Grab the IDs sent from the UI
                 tripId = intent.getStringExtra("EXTRA_TRIP_ID") ?: ""
                 vehicleId = intent.getStringExtra("EXTRA_VEHICLE_ID") ?: ""
+                trackingMode = intent.getStringExtra("EXTRA_TRACKING_MODE") ?: "both"
 
                 val stopIntent = Intent(this, TrackingService::class.java).apply {
                     this.action = "ACTION_STOP"
@@ -128,10 +146,16 @@ class TrackingService : Service() {
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                 )
 
+                val contentText = when(trackingMode) {
+                    "phone" -> "Broadcasting Phone GPS..."
+                    "lora" -> "Monitoring LoRaWAN Sensor..."
+                    else -> "Comparing Phone & LoRaWAN GPS..."
+                }
+
                 // Start the un-swipeable foreground notification
                 val notification = NotificationCompat.Builder(this, CHANNEL_ID)
                     .setContentTitle("RSU Shuttle Tracker")
-                    .setContentText("Actively broadcasting GPS to the server...")
+                    .setContentText(contentText)
                     .setColor(Color.parseColor("#E91E63"))
                     .setSubText("Status: Online")
                     .setUsesChronometer(true)
@@ -149,9 +173,13 @@ class TrackingService : Service() {
                     startForeground(NOTIFICATION_ID, notification)
                 }
 
-                // Connect Sockets and Start GPS!
+                // Connect Sockets
                 socketManager.connect()
-                startLocationUpdates()
+
+                // ONLY Start GPS if mode is 'phone' or 'both'
+                if (trackingMode == "phone" || trackingMode == "both") {
+                    startLocationUpdates()
+                }
             }
             "ACTION_STOP" -> {
                 Log.d("TrackingService", "Stop command received via Notification Button")
@@ -184,6 +212,13 @@ class TrackingService : Service() {
 
     @SuppressLint("MissingPermission")
     private fun startLocationUpdates() {
+        // SAFETY: If we are already tracking, remove the old listener first
+        // to prevent "double-tracking" after screen rotation.
+        if (::locationCallback.isInitialized) {
+            Log.d("TrackingService", "Removing stale LocationCallback before restarting...")
+            fusedLocationClient.removeLocationUpdates(locationCallback)
+        }
+
         val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 3000)
             .setMinUpdateIntervalMillis(3000)
             .build()

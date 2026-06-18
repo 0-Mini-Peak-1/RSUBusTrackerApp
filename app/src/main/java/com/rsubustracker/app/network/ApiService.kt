@@ -9,7 +9,10 @@ import retrofit2.http.Path
 import com.google.gson.annotations.SerializedName
 
 // Tracking request & response
-data class StartTripRequest(val vehicleId: String)
+data class StartTripRequest(
+    val vehicleId: String,
+    val trackingMode: String = "both" // "phone", "lora", or "both"
+)
 data class StartTripResponse(
     @SerializedName("message") val message: String,
     @SerializedName("trip") val trip: TripData
@@ -68,13 +71,14 @@ interface ApiService {
     // End the trip
     @PUT("/api/trips/{tripId}/end")
     fun endTrip(@Path("tripId") tripId: String): Call<Void>
-    // Tracking
+    // Tracking (Legacy)
     @POST("/api/tracking/location")
     fun updateLocation(@Body request: LocationUpdateRequest): Call<Void>
     // Point to the routes
     @POST("/api/auth/vehicle-login")
     fun login(@Body request: LoginRequest): Call<LoginResponse>
 
+    // update active status (Legacy)
     @PUT("api/admin/vehicles/{id}")
     fun updateStatus(
         @Path("id") id: String,
