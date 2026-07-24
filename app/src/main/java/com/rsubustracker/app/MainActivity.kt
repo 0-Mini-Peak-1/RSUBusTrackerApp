@@ -18,8 +18,8 @@ class MainActivity : ComponentActivity() {
 
         // Check for saved data (Auto-Login)
         val sharedPref = getSharedPreferences("BusTrackerPrefs", MODE_PRIVATE)
-        val savedVehicleId = sharedPref.getString("CURRENT_VEHICLE_ID", null)
-        val initialLoginState = savedVehicleId != null // True if ID was found
+        val savedToken = sharedPref.getString("SENDER_TOKEN", null)
+        val initialLoginState = savedToken != null // True if token was found
 
         setContent {
             MaterialTheme {
@@ -46,7 +46,7 @@ class MainActivity : ComponentActivity() {
                             onBackClick = {
                                 // Logout Logic
                                 with(sharedPref.edit()) {
-                                    clear()
+                                    remove("SENDER_TOKEN")
                                     apply()
                                 }
                                 isLoggedIn = false

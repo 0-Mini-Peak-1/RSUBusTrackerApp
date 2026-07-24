@@ -26,10 +26,12 @@ import retrofit2.Response
 
 @Composable
 fun LoginScreen(onLoginSuccess: () -> Unit) {
-    var busId by remember { mutableStateOf("") }
-    var sourceId by remember { mutableStateOf("") }
-    var secret by remember { mutableStateOf("") }
     val context = LocalContext.current
+    val sharedPref = context.getSharedPreferences("BusTrackerPrefs", Context.MODE_PRIVATE)
+
+    var busId by remember { mutableStateOf(sharedPref.getString("CURRENT_VEHICLE_ID", "") ?: "") }
+    var sourceId by remember { mutableStateOf(sharedPref.getString("CURRENT_SOURCE_ID", "") ?: "") }
+    var secret by remember { mutableStateOf(sharedPref.getString("CURRENT_SECRET", "") ?: "") }
 
     // Colors
     val gradientTop = Color(0xFFC85D8D)
@@ -167,12 +169,13 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                                         // Get vehicle name
                                         val vehicleName = response.body()?.vehicle?.name ?: busId
 
-                                        // SAVE Vehicle ID
+                                        // SAVE Vehicle ID and Credentials
                                         val sharedPref = context.getSharedPreferences("BusTrackerPrefs", Context.MODE_PRIVATE)
                                         with (sharedPref.edit()) {
                                             putString("CURRENT_VEHICLE_ID", busId)
                                             putString("CURRENT_VEHICLE_NAME", vehicleName)
                                             putString("CURRENT_SOURCE_ID", sourceId)
+                                            putString("CURRENT_SECRET", secret)
                                             putString("SENDER_TOKEN", response.body()?.token ?: "")
                                             apply()
                                         }
