@@ -1,6 +1,8 @@
 package com.rsubustracker.app.network
 
+import android.content.Context
 import android.util.Log
+import io.socket.client.Ack
 import io.socket.client.IO
 import io.socket.client.Socket
 import org.json.JSONObject
@@ -8,18 +10,26 @@ import com.rsubustracker.app.BuildConfig
 
 private const val BASE_URL = BuildConfig.BASE_URL
 
-class ShuttleSocketManager {
+class ShuttleSocketManager(private val context: Context) {
     private var socket: Socket? = null
-    private var onLoraUpdateListener: ((JSONObject) -> Unit)? = null
+    var onLocationUpdateListener: ((JSONObject) -> Unit)? = null
+    var onLoraUpdateListener: ((JSONObject) -> Unit)? = null
+    var currentSourceId: String? = null
+    var currentVehicleId: String? = null
 
-    fun setOnLoraUpdateListener(listener: (JSONObject) -> Unit) {
-        onLoraUpdateListener = listener
-    }
 
-    fun connect() {
+
+    fun connect(token: String) {
         try {
+            val sharedPref = context.getSharedPreferences("BusTrackerPrefs", Context.MODE_PRIVATE)
+            currentVehicleId = sharedPref.getString("CURRENT_VEHICLE_ID", null)
+            currentSourceId = sharedPref.getString("CURRENT_SOURCE_ID", null)
+
             val options = IO.Options()
             options.transports = arrayOf("websocket") // Force WebSocket transport
+            options.auth = mapOf("token" to token)
+            options.extraHeaders = mapOf("Authorization" to listOf("Bearer $token"))
+            options.forceNew = true
 
             socket = IO.socket(BASE_URL, options)
 
@@ -33,12 +43,24 @@ class ShuttleSocketManager {
                 Log.d("SocketIO", "Disconnected from server")
             }
 
-            // Listen for LoRaWAN updates from the backend
-            socket?.on("lora-update") { args ->
+            // Listen for canonical location updates from the backend
+            socket?.on("location-update") { args ->
                 if (args.isNotEmpty()) {
                     val data = args[0] as JSONObject
-                    onLoraUpdateListener?.invoke(data)
+                    
+                    // Only process updates for our current vehicle!
+                    if (data.optString("vehicleId") == currentVehicleId) {
+                        onLoraUpdateListener?.invoke(data)
+                    }
                 }
+            }
+            
+            socket?.on(Socket.EVENT_CONNECT_ERROR) { args ->
+                Log.e("SocketIO", "Connect Error: ${args.contentToString()}")
+            }
+            
+            socket?.on("error-response") { args ->
+                Log.e("SocketIO", "Backend Error Response: ${args.contentToString()}")
             }
 
             socket?.connect()
@@ -48,21 +70,26 @@ class ShuttleSocketManager {
         }
     }
 
-    fun sendLocationUpdate(tripId: String, busId: String, lat: Double, lng: Double, speed: Float, bearing: Float, accuracy: Float, station: String) {
+    fun sendLocationUpdate(sourceId: String, tripId: String?, busId: String, lat: Double, lng: Double, speed: Float, bearing: Float, accuracy: Float, station: String) {
         if (socket?.connected() == true) {
-            val json = JSONObject().apply {
-                put("tripId", tripId)
-                put("vehicleId", busId)
+            val data = JSONObject().apply {
+                put("sourceId", currentSourceId)
                 put("lat", lat)
                 put("lng", lng)
                 put("speed", speed)
                 put("bearing", bearing)
                 put("accuracy", accuracy)
-                put("station", station)
+                if (tripId != null) {
+                    put("tripId", tripId)
+                }
             }
+            
+            // Update the mobile UI immediately so it's always in sync with our GPS
+            onLocationUpdateListener?.invoke(data)
 
-            // This matches the socket.on('send-location') in server.ts
-            socket?.emit("send-location", json)
+            socket?.emit("send-location", data, Ack { args ->
+                // Acknowledgment from server
+            })
         } else {
             Log.w("SocketIO", "Attempted to send location, but socket is not connected.")
         }

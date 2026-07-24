@@ -27,6 +27,8 @@ import retrofit2.Response
 @Composable
 fun LoginScreen(onLoginSuccess: () -> Unit) {
     var busId by remember { mutableStateOf("") }
+    var sourceId by remember { mutableStateOf("") }
+    var secret by remember { mutableStateOf("") }
     val context = LocalContext.current
 
     // Colors
@@ -110,12 +112,54 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = sourceId,
+                    onValueChange = { sourceId = it },
+                    label = { Text("Source ID") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedBorderColor = primaryBlue,
+                        unfocusedBorderColor = primaryBlue,
+                        focusedLabelColor = primaryBlue,
+                        unfocusedLabelColor = primaryBlue,
+                        focusedTextColor = Color.Black,
+                        unfocusedTextColor = Color.Black
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = secret,
+                    onValueChange = { secret = it },
+                    label = { Text("Secret") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedBorderColor = primaryBlue,
+                        unfocusedBorderColor = primaryBlue,
+                        focusedLabelColor = primaryBlue,
+                        unfocusedLabelColor = primaryBlue,
+                        focusedTextColor = Color.Black,
+                        unfocusedTextColor = Color.Black
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
                 Spacer(modifier = Modifier.height(32.dp))
 
                 Button(
                     onClick = {
-                        if (busId.isNotBlank()) {
-                            val request = LoginRequest(vehicleId = busId)
+                        if (busId.isNotBlank() && sourceId.isNotBlank() && secret.isNotBlank()) {
+                            val request = LoginRequest(vehicleId = busId, sourceId = sourceId, secret = secret)
 
                             RetrofitClient.instance.login(request).enqueue(object : Callback<LoginResponse> {
                                 override fun onResponse(call: Call<LoginResponse>, response: Response<LoginResponse>) {
@@ -128,13 +172,15 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                                         with (sharedPref.edit()) {
                                             putString("CURRENT_VEHICLE_ID", busId)
                                             putString("CURRENT_VEHICLE_NAME", vehicleName)
+                                            putString("CURRENT_SOURCE_ID", sourceId)
+                                            putString("SENDER_TOKEN", response.body()?.token ?: "")
                                             apply()
                                         }
 
                                         Toast.makeText(context, "Welcome ${response.body()?.vehicle?.name}", Toast.LENGTH_SHORT).show()
                                         onLoginSuccess()
                                     } else {
-                                        Toast.makeText(context, "Vehicle ID not found!", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(context, "Login failed! ${response.body()?.message ?: ""}", Toast.LENGTH_LONG).show()
                                     }
                                 }
 

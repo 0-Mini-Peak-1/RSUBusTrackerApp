@@ -33,11 +33,13 @@ class TrackingService : Service() {
     // Core Tracking Variables
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
-    private val socketManager = ShuttleSocketManager()
+    private val socketManager by lazy { ShuttleSocketManager(this) }
 
     private var tripId: String = ""
     private var vehicleId: String = ""
-    private var trackingMode: String = "both" // NEW
+    private var trackingMode: String = "both"
+    private var sourceId: String = ""
+    private var token: String = ""
     private var stopsList: List<Stop> = emptyList()
 
     override fun onCreate() {
@@ -46,10 +48,11 @@ class TrackingService : Service() {
         createNotificationChannel()
 
         // Handle LoRa updates from the socket
-        socketManager.setOnLoraUpdateListener { data ->
+        socketManager.onLoraUpdateListener = { data ->
             val lat = data.optDouble("lat", 0.0)
             val lng = data.optDouble("lng", 0.0)
             val recordedAt = data.optString("recordedAt", "")
+            val sourceId = data.optString("sourceId", "-")
 
             // Broadcast to the UI
             val loraIntent = Intent("LORA_LOCATION_UPDATE").apply {
@@ -57,6 +60,7 @@ class TrackingService : Service() {
                 putExtra("lat", lat)
                 putExtra("lng", lng)
                 putExtra("recordedAt", recordedAt)
+                putExtra("sourceId", sourceId)
             }
             sendBroadcast(loraIntent)
         }
@@ -135,6 +139,8 @@ class TrackingService : Service() {
                 tripId = intent.getStringExtra("EXTRA_TRIP_ID") ?: ""
                 vehicleId = intent.getStringExtra("EXTRA_VEHICLE_ID") ?: ""
                 trackingMode = intent.getStringExtra("EXTRA_TRACKING_MODE") ?: "both"
+                sourceId = intent.getStringExtra("EXTRA_SOURCE_ID") ?: ""
+                token = intent.getStringExtra("EXTRA_TOKEN") ?: ""
 
                 val stopIntent = Intent(this, TrackingService::class.java).apply {
                     this.action = "ACTION_STOP"
@@ -174,7 +180,7 @@ class TrackingService : Service() {
                 }
 
                 // Connect Sockets
-                socketManager.connect()
+                socketManager.connect(token)
 
                 // ONLY Start GPS if mode is 'phone' or 'both'
                 if (trackingMode == "phone" || trackingMode == "both") {
@@ -189,8 +195,12 @@ class TrackingService : Service() {
                 }
                 sendBroadcast(stopBroadcast)
 
+                // 2. Terminate the Trip in Backend (using SharedPreferences for token)
                 if (tripId.isNotBlank()) {
-                    RetrofitClient.instance.endTrip(tripId).enqueue(object : Callback<Void> {
+                    val sharedPref = getSharedPreferences("BusTrackerPrefs", Context.MODE_PRIVATE)
+                    val storedToken = sharedPref.getString("SENDER_TOKEN", "") ?: ""
+                    val authHeader = "Bearer $storedToken"
+                    RetrofitClient.instance.endTrip(authHeader, tripId).enqueue(object : Callback<Void> {
                         override fun onResponse(call: Call<Void>, response: Response<Void>) {}
                         override fun onFailure(call: Call<Void>, t: Throwable) {}
                     })
@@ -230,6 +240,7 @@ class TrackingService : Service() {
                     val calculatedStationId = getNearestStationId(location)
                     // Backend handles the station maths
                     socketManager.sendLocationUpdate(
+                        sourceId = sourceId,
                         tripId = tripId,
                         busId = vehicleId,
                         lat = location.latitude,
@@ -273,7 +284,9 @@ class TrackingService : Service() {
 
         // End trip
         if (tripId.isNotBlank()) {
-            com.rsubustracker.app.network.RetrofitClient.instance.endTrip(tripId).enqueue(object : retrofit2.Callback<Void> {
+            val storedToken = sharedPref.getString("SENDER_TOKEN", "") ?: ""
+            val authHeader = "Bearer $storedToken"
+            com.rsubustracker.app.network.RetrofitClient.instance.endTrip(authHeader, tripId).enqueue(object : retrofit2.Callback<Void> {
                 override fun onResponse(call: retrofit2.Call<Void>, response: retrofit2.Response<Void>) {}
                 override fun onFailure(call: retrofit2.Call<Void>, t: Throwable) {}
             })

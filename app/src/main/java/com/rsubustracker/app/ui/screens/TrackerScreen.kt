@@ -65,6 +65,9 @@ fun TrackerScreen(onBackClick: () -> Unit) {
     val sharedPref = context.getSharedPreferences("BusTrackerPrefs", Context.MODE_PRIVATE)
     val vehicleName = sharedPref.getString("CURRENT_VEHICLE_NAME", "Bus") ?: "Bus"
     val vehicleId = sharedPref.getString("CURRENT_VEHICLE_ID", "") ?: ""
+    val sourceId = sharedPref.getString("CURRENT_SOURCE_ID", "") ?: ""
+    val token = sharedPref.getString("SENDER_TOKEN", "") ?: ""
+    val authHeader = "Bearer $token"
 
     // Live data states
     var stopsList by remember { mutableStateOf<List<Stop>>(emptyList()) }
@@ -80,6 +83,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
     var loraLat by remember { mutableStateOf("Waiting...") }
     var loraLng by remember { mutableStateOf("Waiting...") }
     var loraLastUpdate by remember { mutableStateOf("-") }
+    var loraSourceId by remember { mutableStateOf("-") }
 
     // Tracking Mode
     var trackingMode by rememberSaveable { mutableStateOf("both") } // "phone", "lora", "both"
@@ -124,9 +128,11 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                     val lat = intent.getDoubleExtra("lat", 0.0)
                     val lng = intent.getDoubleExtra("lng", 0.0)
                     val timestamp = intent.getStringExtra("recordedAt") ?: ""
+                    val sourceId = intent.getStringExtra("sourceId") ?: "-"
 
                     loraLat = lat.toString()
                     loraLng = lng.toString()
+                    loraSourceId = sourceId
                     loraLastUpdate = if (timestamp.isNotBlank()) {
                         // Extract time from ISO string or just use current time for simplicity if backend format is weird
                         SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
@@ -233,7 +239,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
             ContextCompat.startForegroundService(context, prepIntent)
 
             val request = StartTripRequest(vehicleId = vehicleId, trackingMode = trackingMode)
-            RetrofitClient.instance.startTrip(request).enqueue(object : Callback<StartTripResponse> {
+            RetrofitClient.instance.startTrip(authHeader, request).enqueue(object : Callback<StartTripResponse> {
                 override fun onResponse(call: Call<StartTripResponse>, response: Response<StartTripResponse>) {
 
                     val newTripId = response.body()?.trip?.id
@@ -250,6 +256,8 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                             putExtra("EXTRA_TRIP_ID", activeTripId)
                             putExtra("EXTRA_VEHICLE_ID", vehicleId)
                             putExtra("EXTRA_TRACKING_MODE", trackingMode)
+                            putExtra("EXTRA_SOURCE_ID", sourceId)
+                            putExtra("EXTRA_TOKEN", token)
                         }
                         ContextCompat.startForegroundService(context, intent)
 
@@ -306,7 +314,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
 
                     // End the trip in the database
                     if (activeTripId.isNotBlank()) {
-                        RetrofitClient.instance.endTrip(activeTripId).enqueue(object : Callback<Void> {
+                        RetrofitClient.instance.endTrip(authHeader, activeTripId).enqueue(object : Callback<Void> {
                             override fun onResponse(call: Call<Void>, response: Response<Void>) {}
                             override fun onFailure(call: Call<Void>, t: Throwable) {}
                         })
@@ -397,6 +405,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                         // --- LORA DATA SECTION ---
                         if (trackingMode == "lora" || trackingMode == "both") {
                             item { SectionHeader("LoRaWAN Sensor (Remote)", Icons.Default.Sensors) }
+                            item { InfoRow(Icons.Default.Info, "Sensor ID", loraSourceId) }
                             item { InfoRow(Icons.Default.Place,"LoRa Latitude", loraLat) }
                             item { InfoRow(Icons.Default.Place, "LoRa Longitude", loraLng) }
                             item { InfoRow(Icons.Default.Schedule, "Last LoRa Update", loraLastUpdate) }
@@ -434,7 +443,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                                         ContextCompat.startForegroundService(context, prepIntent)
 
                                         val request = StartTripRequest(vehicleId = vehicleId, trackingMode = trackingMode)
-                                        RetrofitClient.instance.startTrip(request).enqueue(object : Callback<StartTripResponse> {
+                                        RetrofitClient.instance.startTrip(authHeader, request).enqueue(object : Callback<StartTripResponse> {
                                             override fun onResponse(call: Call<StartTripResponse>, response: Response<StartTripResponse>) {
                                                 val newTripId = response.body()?.trip?.id
                                                 if (response.isSuccessful && !newTripId.isNullOrBlank()) {
@@ -447,6 +456,8 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                                                         putExtra("EXTRA_TRIP_ID", activeTripId)
                                                         putExtra("EXTRA_VEHICLE_ID", vehicleId)
                                                         putExtra("EXTRA_TRACKING_MODE", trackingMode)
+                                                        putExtra("EXTRA_SOURCE_ID", sourceId)
+                                                        putExtra("EXTRA_TOKEN", token)
                                                     }
                                                     ContextCompat.startForegroundService(context, intent)
                                                 } else {
@@ -469,7 +480,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                                 } else {
                                     // --- THE STOP LOGIC ---
                                     if (activeTripId.isNotBlank()) {
-                                        RetrofitClient.instance.endTrip(activeTripId).enqueue(object : Callback<Void> {
+                                        RetrofitClient.instance.endTrip(authHeader, activeTripId).enqueue(object : Callback<Void> {
                                             override fun onResponse(call: Call<Void>, response: Response<Void>) {
                                                 if (response.isSuccessful) activeTripId = ""
                                             }

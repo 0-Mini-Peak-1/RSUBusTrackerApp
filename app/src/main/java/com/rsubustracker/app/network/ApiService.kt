@@ -6,6 +6,7 @@ import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
+import retrofit2.http.Header
 import com.google.gson.annotations.SerializedName
 
 // Tracking request & response
@@ -25,15 +26,18 @@ data class TripData(
 data class LocationUpdateRequest(
     val tripId: String,
     val vehicleId: String,
+    val sourceId: String,
     val lat: Double,
     val lng: Double,
     val speed: Float,
     val bearing: Float,
     val accuracy: Float
 )
-// Send the vehicleId
+// Send the vehicleId, sourceId, and secret for auth
 data class LoginRequest(
-    val vehicleId: String
+    val vehicleId: String,
+    val sourceId: String,
+    val secret: String
 )
 
 // Expect a Vehicle object back
@@ -47,6 +51,7 @@ data class VehicleData(
 data class LoginResponse(
     val success: Boolean,
     val message: String,
+    val token: String? = null,
     val vehicle: VehicleData? = null
 )
 
@@ -67,10 +72,16 @@ data class Stop(
 interface ApiService {
     // Start the trip
     @POST("/api/trips/start")
-    fun startTrip(@Body request: StartTripRequest): Call<StartTripResponse>
+    fun startTrip(
+        @Header("Authorization") authHeader: String,
+        @Body request: StartTripRequest
+    ): Call<StartTripResponse>
     // End the trip
     @PUT("/api/trips/{tripId}/end")
-    fun endTrip(@Path("tripId") tripId: String): Call<Void>
+    fun endTrip(
+        @Header("Authorization") authHeader: String,
+        @Path("tripId") tripId: String
+    ): Call<Void>
     // Tracking (Legacy)
     @POST("/api/tracking/location")
     fun updateLocation(@Body request: LocationUpdateRequest): Call<Void>
