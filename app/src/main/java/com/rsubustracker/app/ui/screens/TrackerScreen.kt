@@ -66,6 +66,7 @@ fun TrackerScreen(onBackClick: () -> Unit) {
     val vehicleName = sharedPref.getString("CURRENT_VEHICLE_NAME", "Bus") ?: "Bus"
     val vehicleId = sharedPref.getString("CURRENT_VEHICLE_ID", "") ?: ""
     val sourceId = sharedPref.getString("CURRENT_SOURCE_ID", "") ?: ""
+    val sourceType = sharedPref.getString("CURRENT_SOURCE_TYPE", "mobile") ?: "mobile"
     val token = sharedPref.getString("SENDER_TOKEN", "") ?: ""
     val authHeader = "Bearer $token"
 
@@ -85,10 +86,11 @@ fun TrackerScreen(onBackClick: () -> Unit) {
     var loraLastUpdate by remember { mutableStateOf("-") }
     var loraSourceId by remember { mutableStateOf("-") }
 
-    // Tracking Mode
-    var trackingMode by rememberSaveable { mutableStateOf("both") } // "phone", "lora", "both"
+    // We don't use TrackingModeSelector anymore, the mode is driven by the backend source type
+    var trackingMode by remember { mutableStateOf("phone") } 
+    trackingMode = if (sourceType == "mobile") "phone" else "lora"
 
-    // Store the active trip ID from the backend
+    // Check if we have an active trip that survived process death
     val savedTripId = sharedPref.getString("ACTIVE_TRIP_ID", "") ?: ""
     var activeTripId by remember { mutableStateOf(savedTripId) }
     var isTracking by remember { mutableStateOf(activeTripId.isNotBlank()) }
@@ -377,19 +379,10 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                             Spacer(modifier = Modifier.height(8.dp))
                         }
 
-                        // MODE SELECTOR (Only shown when NOT tracking)
-                        if (!isTracking) {
-                            item {
-                                TrackingModeSelector(
-                                    selectedMode = trackingMode,
-                                    onModeSelected = { trackingMode = it }
-                                )
-                                Spacer(modifier = Modifier.height(16.dp))
-                            }
-                        }
-
-                        // --- PHONE DATA SECTION ---
-                        if (trackingMode == "phone" || trackingMode == "both") {
+                        // --- DATA SECTIONS ---
+                        // Only display the data section for our current device type
+                        
+                        if (sourceType == "mobile") {
                             item { SectionHeader("Phone Sensor (Local GPS)", Icons.Default.Smartphone) }
                             item { InfoRow(Icons.Default.DirectionsBus, "Station", currentStation) }
                             item { InfoRow(Icons.Default.Navigation, "Heading Direction", bearing) }
@@ -399,17 +392,21 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                             item { InfoRow(Icons.Default.Place, "Latitude", latitude) }
                             item { InfoRow(Icons.Default.Place, "Longitude", longitude) }
                             item { Spacer(modifier = Modifier.height(16.dp)) }
-
-                        }
-
-                        // --- LORA DATA SECTION ---
-                        if (trackingMode == "lora" || trackingMode == "both") {
+                        } else if (sourceType == "lorawan") {
                             item { SectionHeader("LoRaWAN Sensor (Remote)", Icons.Default.Sensors) }
                             item { InfoRow(Icons.Default.Info, "Sensor ID", loraSourceId) }
-                            item { InfoRow(Icons.Default.Place,"LoRa Latitude", loraLat) }
+                            item { InfoRow(Icons.Default.Place, "LoRa Latitude", loraLat) }
                             item { InfoRow(Icons.Default.Place, "LoRa Longitude", loraLng) }
                             item { InfoRow(Icons.Default.Schedule, "Last LoRa Update", loraLastUpdate) }
+                        } else if (sourceType == "esp32") {
+                            item { SectionHeader("ESP32 Sensor (Remote)", Icons.Default.Memory) }
+                            item { InfoRow(Icons.Default.Info, "Sensor ID", loraSourceId) }
+                            item { InfoRow(Icons.Default.Place, "ESP32 Latitude", loraLat) }
+                            item { InfoRow(Icons.Default.Place, "ESP32 Longitude", loraLng) }
+                            item { InfoRow(Icons.Default.Schedule, "Last ESP32 Update", loraLastUpdate) }
                         }
+
+
                     }
 
                     // 2. THE FLOATING MORPHING BUTTON

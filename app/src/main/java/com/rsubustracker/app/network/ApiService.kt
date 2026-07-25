@@ -48,11 +48,19 @@ data class VehicleData(
     val status: String
 )
 
+data class SourceData(
+    val id: String,
+    val type: String,
+    val vehicleId: String,
+    val name: String? = null
+)
+
 data class LoginResponse(
     val success: Boolean,
     val message: String,
     val token: String? = null,
-    val vehicle: VehicleData? = null
+    val vehicle: VehicleData? = null,
+    val source: SourceData? = null
 )
 
 // Request status

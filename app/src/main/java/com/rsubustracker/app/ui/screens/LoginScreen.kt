@@ -168,6 +168,8 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                                     if (response.isSuccessful && response.body()?.success == true) {
                                         // Get vehicle name
                                         val vehicleName = response.body()?.vehicle?.name ?: busId
+                                        val sourceName = response.body()?.source?.name ?: "Unknown Sensor"
+                                        val sourceType = response.body()?.source?.type ?: "mobile"
 
                                         // SAVE Vehicle ID and Credentials
                                         val sharedPref = context.getSharedPreferences("BusTrackerPrefs", Context.MODE_PRIVATE)
@@ -176,11 +178,13 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                                             putString("CURRENT_VEHICLE_NAME", vehicleName)
                                             putString("CURRENT_SOURCE_ID", sourceId)
                                             putString("CURRENT_SECRET", secret)
+                                            putString("CURRENT_SOURCE_TYPE", sourceType)
+                                            putString("CURRENT_SOURCE_NAME", sourceName)
                                             putString("SENDER_TOKEN", response.body()?.token ?: "")
                                             apply()
                                         }
 
-                                        Toast.makeText(context, "Welcome ${response.body()?.vehicle?.name}", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Welcome $vehicleName ($sourceName)", Toast.LENGTH_SHORT).show()
                                         onLoginSuccess()
                                     } else {
                                         Toast.makeText(context, "Login failed! ${response.body()?.message ?: ""}", Toast.LENGTH_LONG).show()
