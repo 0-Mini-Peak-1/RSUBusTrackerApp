@@ -3,6 +3,8 @@ package com.rsubustracker.app.ui.screens
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.content.SharedPreferences
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
@@ -33,6 +35,8 @@ import androidx.core.content.ContextCompat
 import com.rsubustracker.app.network.RetrofitClient
 import com.rsubustracker.app.network.StartTripRequest
 import com.rsubustracker.app.network.StartTripResponse
+import com.rsubustracker.app.network.LoginRequest
+import com.rsubustracker.app.network.LoginResponse
 import com.rsubustracker.app.network.Stop
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -241,87 +245,36 @@ fun TrackerScreen(onBackClick: () -> Unit) {
             ContextCompat.startForegroundService(context, prepIntent)
 
             val request = StartTripRequest(vehicleId = vehicleId, trackingMode = trackingMode)
-            RetrofitClient.instance.startTrip(authHeader, request).enqueue(object : Callback<StartTripResponse> {
-                override fun onResponse(call: Call<StartTripResponse>, response: Response<StartTripResponse>) {
-
-                    val newTripId = response.body()?.trip?.id
-                    if (response.isSuccessful && !newTripId.isNullOrBlank()) {
-                        activeTripId = newTripId
-                        isTracking = true
-
-                        // Save to storage to survive screen rotation
-                        sharedPref.edit().putString("ACTIVE_TRIP_ID", activeTripId).apply()
-
-                        // Tell the service to start
-                        val intent = Intent(context, TrackingService::class.java).apply {
-                            action = "ACTION_START"
-                            putExtra("EXTRA_TRIP_ID", activeTripId)
-                            putExtra("EXTRA_VEHICLE_ID", vehicleId)
-                            putExtra("EXTRA_TRACKING_MODE", trackingMode)
-                            putExtra("EXTRA_SOURCE_ID", sourceId)
-                            putExtra("EXTRA_TOKEN", token)
-                        }
-                        ContextCompat.startForegroundService(context, intent)
-
-                    } else if (response.code() == 401 || response.code() == 403) {
-                        println("Token expired! Attempting auto-relogin...")
-                        val secret = sharedPref.getString("CURRENT_SECRET", "") ?: ""
-                        val loginReq = com.rsubustracker.app.network.LoginRequest(vehicleId, sourceId, secret)
-                        RetrofitClient.instance.login(loginReq).enqueue(object : Callback<com.rsubustracker.app.network.LoginResponse> {
-                            override fun onResponse(call: Call<com.rsubustracker.app.network.LoginResponse>, loginRes: Response<com.rsubustracker.app.network.LoginResponse>) {
-                                if (loginRes.isSuccessful && loginRes.body()?.success == true) {
-                                    val newToken = loginRes.body()?.token ?: ""
-                                    sharedPref.edit().putString("SENDER_TOKEN", newToken).apply()
-                                    // Retry startTrip with new token
-                                    val newAuth = "Bearer $newToken"
-                                    RetrofitClient.instance.startTrip(newAuth, request).enqueue(object : Callback<StartTripResponse> {
-                                        override fun onResponse(call: Call<StartTripResponse>, retryRes: Response<StartTripResponse>) {
-                                            val retryTripId = retryRes.body()?.trip?.id
-                                            if (retryRes.isSuccessful && !retryTripId.isNullOrBlank()) {
-                                                activeTripId = retryTripId
-                                                isTracking = true
-                                                sharedPref.edit().putString("ACTIVE_TRIP_ID", activeTripId).apply()
-                                                val intent = Intent(context, TrackingService::class.java).apply {
-                                                    action = "ACTION_START"
-                                                    putExtra("EXTRA_TRIP_ID", activeTripId)
-                                                    putExtra("EXTRA_VEHICLE_ID", vehicleId)
-                                                    putExtra("EXTRA_TRACKING_MODE", trackingMode)
-                                                    putExtra("EXTRA_SOURCE_ID", sourceId)
-                                                    putExtra("EXTRA_TOKEN", newToken)
-                                                }
-                                                ContextCompat.startForegroundService(context, intent)
-                                            } else {
-                                                val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
-                                                context.startService(stopIntent)
-                                            }
-                                        }
-                                        override fun onFailure(call: Call<StartTripResponse>, t: Throwable) {
-                                            val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
-                                            context.startService(stopIntent)
-                                        }
-                                    })
-                                } else {
-                                    val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
-                                    context.startService(stopIntent)
-                                }
-                            }
-                            override fun onFailure(call: Call<com.rsubustracker.app.network.LoginResponse>, t: Throwable) {
-                                val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
-                                context.startService(stopIntent)
-                            }
-                        })
-                    } else {
-                        println("Failed to parse trip ID. Response was: ${response.code()}")
-                        val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
-                        context.startService(stopIntent)
+            attemptStartTrip(
+                context = context,
+                authHeader = authHeader,
+                request = request,
+                vehicleId = vehicleId,
+                trackingMode = trackingMode,
+                sourceId = sourceId,
+                token = token,
+                sharedPref = sharedPref,
+                onSuccess = { newTripId ->
+                    activeTripId = newTripId
+                    isTracking = true
+                    sharedPref.edit().putString("ACTIVE_TRIP_ID", activeTripId).apply()
+                    val latestToken = sharedPref.getString("SENDER_TOKEN", token) ?: token
+                    val intent = Intent(context, TrackingService::class.java).apply {
+                        action = "ACTION_START"
+                        putExtra("EXTRA_TRIP_ID", activeTripId)
+                        putExtra("EXTRA_VEHICLE_ID", vehicleId)
+                        putExtra("EXTRA_TRACKING_MODE", trackingMode)
+                        putExtra("EXTRA_SOURCE_ID", sourceId)
+                        putExtra("EXTRA_TOKEN", latestToken)
                     }
-                }
-                override fun onFailure(call: Call<StartTripResponse>, t: Throwable) {
-                    println("Failed to start trip: ${t.message}")
+                    ContextCompat.startForegroundService(context, intent)
+                },
+                onFailure = { errorMessage ->
+                    println(errorMessage)
                     val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
                     context.startService(stopIntent)
                 }
-            })
+            )
         } else {
             // Permission Denied
             isTracking = false
@@ -487,33 +440,36 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                                         ContextCompat.startForegroundService(context, prepIntent)
 
                                         val request = StartTripRequest(vehicleId = vehicleId, trackingMode = trackingMode)
-                                        RetrofitClient.instance.startTrip(authHeader, request).enqueue(object : Callback<StartTripResponse> {
-                                            override fun onResponse(call: Call<StartTripResponse>, response: Response<StartTripResponse>) {
-                                                val newTripId = response.body()?.trip?.id
-                                                if (response.isSuccessful && !newTripId.isNullOrBlank()) {
-                                                    activeTripId = newTripId
-                                                    isTracking = true
-                                                    sharedPref.edit().putString("ACTIVE_TRIP_ID", activeTripId).apply()
-
-                                                    val intent = Intent(context, TrackingService::class.java).apply {
-                                                        action = "ACTION_START"
-                                                        putExtra("EXTRA_TRIP_ID", activeTripId)
-                                                        putExtra("EXTRA_VEHICLE_ID", vehicleId)
-                                                        putExtra("EXTRA_TRACKING_MODE", trackingMode)
-                                                        putExtra("EXTRA_SOURCE_ID", sourceId)
-                                                        putExtra("EXTRA_TOKEN", token)
-                                                    }
-                                                    ContextCompat.startForegroundService(context, intent)
-                                                } else {
-                                                    val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
-                                                    context.startService(stopIntent)
+                                        attemptStartTrip(
+                                            context = context,
+                                            authHeader = authHeader,
+                                            request = request,
+                                            vehicleId = vehicleId,
+                                            trackingMode = trackingMode,
+                                            sourceId = sourceId,
+                                            token = token,
+                                            sharedPref = sharedPref,
+                                            onSuccess = { newTripId ->
+                                                activeTripId = newTripId
+                                                isTracking = true
+                                                sharedPref.edit().putString("ACTIVE_TRIP_ID", activeTripId).apply()
+                                                val latestToken = sharedPref.getString("SENDER_TOKEN", token) ?: token
+                                                val intent = Intent(context, TrackingService::class.java).apply {
+                                                    action = "ACTION_START"
+                                                    putExtra("EXTRA_TRIP_ID", activeTripId)
+                                                    putExtra("EXTRA_VEHICLE_ID", vehicleId)
+                                                    putExtra("EXTRA_TRACKING_MODE", trackingMode)
+                                                    putExtra("EXTRA_SOURCE_ID", sourceId)
+                                                    putExtra("EXTRA_TOKEN", latestToken)
                                                 }
-                                            }
-                                            override fun onFailure(call: Call<StartTripResponse>, t: Throwable) {
+                                                ContextCompat.startForegroundService(context, intent)
+                                            },
+                                            onFailure = { errorMessage ->
+                                                println(errorMessage)
                                                 val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
                                                 context.startService(stopIntent)
                                             }
-                                        })
+                                        )
                                     } else {
                                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                                             permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.POST_NOTIFICATIONS))
@@ -711,4 +667,61 @@ fun InfoRow(
         }
     }
     HorizontalDivider(color = Color(0xFFE0E0E0), thickness = 1.dp)
+}
+
+fun attemptStartTrip(
+    context: Context,
+    authHeader: String,
+    request: StartTripRequest,
+    vehicleId: String,
+    trackingMode: String,
+    sourceId: String,
+    token: String,
+    sharedPref: SharedPreferences,
+    onSuccess: (String) -> Unit,
+    onFailure: (String) -> Unit
+) {
+    RetrofitClient.instance.startTrip(authHeader, request).enqueue(object : Callback<StartTripResponse> {
+        override fun onResponse(call: Call<StartTripResponse>, response: Response<StartTripResponse>) {
+            val newTripId = response.body()?.trip?.id
+            when {
+                response.isSuccessful && !newTripId.isNullOrBlank() -> onSuccess(newTripId)
+                response.code() == 401 || response.code() == 403 -> {
+                    Log.w("TrackerScreen", "Token expired on startTrip, attempting relogin...")
+                    val secret = sharedPref.getString("CURRENT_SECRET", "") ?: ""
+                    RetrofitClient.instance.login(LoginRequest(vehicleId, sourceId, secret))
+                        .enqueue(object : Callback<LoginResponse> {
+                            override fun onResponse(call: Call<LoginResponse>, loginRes: Response<LoginResponse>) {
+                                val newToken = loginRes.body()?.token
+                                if (loginRes.isSuccessful && loginRes.body()?.success == true && !newToken.isNullOrBlank()) {
+                                    sharedPref.edit().putString("SENDER_TOKEN", newToken).apply()
+                                    // Retry once with the fresh token
+                                    RetrofitClient.instance.startTrip("Bearer $newToken", request)
+                                        .enqueue(object : Callback<StartTripResponse> {
+                                            override fun onResponse(call: Call<StartTripResponse>, retryRes: Response<StartTripResponse>) {
+                                                val retryId = retryRes.body()?.trip?.id
+                                                if (retryRes.isSuccessful && !retryId.isNullOrBlank()) onSuccess(retryId)
+                                                else onFailure("Could not start trip after relogin (${retryRes.code()})")
+                                            }
+                                            override fun onFailure(call: Call<StartTripResponse>, t: Throwable) {
+                                                onFailure("Network error on retry: ${t.message}")
+                                            }
+                                        })
+                                } else {
+                                    onFailure("Session expired and relogin failed")
+                                }
+                            }
+                            override fun onFailure(call: Call<LoginResponse>, t: Throwable) {
+                                onFailure("Network error during relogin: ${t.message}")
+                            }
+                        })
+                }
+                else -> onFailure("Failed to start trip (${response.code()})")
+            }
+        }
+        override fun onFailure(call: Call<StartTripResponse>, t: Throwable) {
+            Log.e("TrackerScreen", "startTrip network failure", t)
+            onFailure("Network error: ${t.message}")
+        }
+    })
 }

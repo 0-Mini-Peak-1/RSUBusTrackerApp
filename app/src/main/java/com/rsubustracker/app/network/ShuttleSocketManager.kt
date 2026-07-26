@@ -73,12 +73,14 @@ class ShuttleSocketManager(private val context: Context) {
     fun sendLocationUpdate(sourceId: String, tripId: String?, busId: String, lat: Double, lng: Double, speed: Float, bearing: Float, accuracy: Float, station: String) {
         if (socket?.connected() == true) {
             val data = JSONObject().apply {
-                put("sourceId", currentSourceId)
+                put("sourceId", sourceId)
+                put("busId", busId)
                 put("lat", lat)
                 put("lng", lng)
                 put("speed", speed)
                 put("bearing", bearing)
                 put("accuracy", accuracy)
+                put("station", station)
                 if (tripId != null) {
                     put("tripId", tripId)
                 }
