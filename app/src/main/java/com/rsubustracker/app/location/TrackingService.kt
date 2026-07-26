@@ -24,6 +24,9 @@ import retrofit2.Callback
 import retrofit2.Response
 import android.app.PendingIntent
 import com.rsubustracker.app.MainActivity
+import android.os.PowerManager
+import kotlinx.coroutines.*
+import com.rsubustracker.app.network.LoginRequest
 
 class TrackingService : Service() {
 
@@ -42,10 +45,16 @@ class TrackingService : Service() {
     private var token: String = ""
     private var stopsList: List<Stop> = emptyList()
 
+    private var wakeLock: PowerManager.WakeLock? = null
+    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
     override fun onCreate() {
         super.onCreate()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         createNotificationChannel()
+
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BusTracker::TrackingWakeLock")
 
         // Handle LoRa updates from the socket
         socketManager.onLoraUpdateListener = { data ->
@@ -141,6 +150,34 @@ class TrackingService : Service() {
                 trackingMode = intent.getStringExtra("EXTRA_TRACKING_MODE") ?: "both"
                 sourceId = intent.getStringExtra("EXTRA_SOURCE_ID") ?: ""
                 token = intent.getStringExtra("EXTRA_TOKEN") ?: ""
+                
+                wakeLock?.acquire(24 * 60 * 60 * 1000L) // 24 hours max
+                
+                // Keep token alive loop
+                val sharedPref = getSharedPreferences("BusTrackerPrefs", Context.MODE_PRIVATE)
+                val secret = sharedPref.getString("CURRENT_SECRET", "") ?: ""
+                serviceScope.launch {
+                    while(isActive) {
+                        delay(12 * 60 * 1000L) // 12 minutes
+                        Log.d("TrackingService", "Refreshing auth token...")
+                        try {
+                            val req = LoginRequest(vehicleId, sourceId, secret)
+                            val response = RetrofitClient.instance.login(req).execute()
+                            if (response.isSuccessful && response.body()?.success == true) {
+                                val newToken = response.body()?.token
+                                if (!newToken.isNullOrEmpty()) {
+                                    token = newToken
+                                    sharedPref.edit().putString("SENDER_TOKEN", token).apply()
+                                    socketManager.disconnect()
+                                    socketManager.connect(token)
+                                    Log.d("TrackingService", "Token refreshed successfully")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e("TrackingService", "Failed to refresh token", e)
+                        }
+                    }
+                }
 
                 val stopIntent = Intent(this, TrackingService::class.java).apply {
                     this.action = "ACTION_STOP"
@@ -309,6 +346,11 @@ class TrackingService : Service() {
             fusedLocationClient.removeLocationUpdates(locationCallback)
         }
         socketManager.disconnect()
+        
+        if (wakeLock?.isHeld == true) {
+            wakeLock?.release()
+        }
+        serviceScope.cancel()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

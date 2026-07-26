@@ -184,7 +184,7 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                                             apply()
                                         }
 
-                                        Toast.makeText(context, "Welcome $vehicleName ($sourceName)", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Welcome $vehicleName (${sourceType.replaceFirstChar { it.uppercase() }})", Toast.LENGTH_SHORT).show()
                                         onLoginSuccess()
                                     } else {
                                         Toast.makeText(context, "Login failed! ${response.body()?.message ?: ""}", Toast.LENGTH_LONG).show()

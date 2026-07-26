@@ -263,6 +263,53 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                         }
                         ContextCompat.startForegroundService(context, intent)
 
+                    } else if (response.code() == 401 || response.code() == 403) {
+                        println("Token expired! Attempting auto-relogin...")
+                        val secret = sharedPref.getString("CURRENT_SECRET", "") ?: ""
+                        val loginReq = com.rsubustracker.app.network.LoginRequest(vehicleId, sourceId, secret)
+                        RetrofitClient.instance.login(loginReq).enqueue(object : Callback<com.rsubustracker.app.network.LoginResponse> {
+                            override fun onResponse(call: Call<com.rsubustracker.app.network.LoginResponse>, loginRes: Response<com.rsubustracker.app.network.LoginResponse>) {
+                                if (loginRes.isSuccessful && loginRes.body()?.success == true) {
+                                    val newToken = loginRes.body()?.token ?: ""
+                                    sharedPref.edit().putString("SENDER_TOKEN", newToken).apply()
+                                    // Retry startTrip with new token
+                                    val newAuth = "Bearer $newToken"
+                                    RetrofitClient.instance.startTrip(newAuth, request).enqueue(object : Callback<StartTripResponse> {
+                                        override fun onResponse(call: Call<StartTripResponse>, retryRes: Response<StartTripResponse>) {
+                                            val retryTripId = retryRes.body()?.trip?.id
+                                            if (retryRes.isSuccessful && !retryTripId.isNullOrBlank()) {
+                                                activeTripId = retryTripId
+                                                isTracking = true
+                                                sharedPref.edit().putString("ACTIVE_TRIP_ID", activeTripId).apply()
+                                                val intent = Intent(context, TrackingService::class.java).apply {
+                                                    action = "ACTION_START"
+                                                    putExtra("EXTRA_TRIP_ID", activeTripId)
+                                                    putExtra("EXTRA_VEHICLE_ID", vehicleId)
+                                                    putExtra("EXTRA_TRACKING_MODE", trackingMode)
+                                                    putExtra("EXTRA_SOURCE_ID", sourceId)
+                                                    putExtra("EXTRA_TOKEN", newToken)
+                                                }
+                                                ContextCompat.startForegroundService(context, intent)
+                                            } else {
+                                                val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
+                                                context.startService(stopIntent)
+                                            }
+                                        }
+                                        override fun onFailure(call: Call<StartTripResponse>, t: Throwable) {
+                                            val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
+                                            context.startService(stopIntent)
+                                        }
+                                    })
+                                } else {
+                                    val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
+                                    context.startService(stopIntent)
+                                }
+                            }
+                            override fun onFailure(call: Call<com.rsubustracker.app.network.LoginResponse>, t: Throwable) {
+                                val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
+                                context.startService(stopIntent)
+                            }
+                        })
                     } else {
                         println("Failed to parse trip ID. Response was: ${response.code()}")
                         val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
