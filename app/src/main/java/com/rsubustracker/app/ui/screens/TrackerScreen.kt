@@ -187,6 +187,9 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                 action = "ACTION_START"
                 putExtra("EXTRA_TRIP_ID", activeTripId)
                 putExtra("EXTRA_VEHICLE_ID", vehicleId)
+                putExtra("EXTRA_TRACKING_MODE", trackingMode)
+                putExtra("EXTRA_SOURCE_ID", sourceId)
+                putExtra("EXTRA_TOKEN", sharedPref.getString("SENDER_TOKEN", "") ?: "")
             }
             ContextCompat.startForegroundService(context, intent)
         }

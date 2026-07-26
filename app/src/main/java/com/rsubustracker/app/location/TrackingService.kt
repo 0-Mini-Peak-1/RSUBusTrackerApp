@@ -44,6 +44,7 @@ class TrackingService : Service() {
     private var sourceId: String = ""
     private var token: String = ""
     private var stopsList: List<Stop> = emptyList()
+    private var isCurrentlyTracking = false
 
     private var wakeLock: PowerManager.WakeLock? = null
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -144,6 +145,12 @@ class TrackingService : Service() {
             }
 
             "ACTION_START" -> {
+                if (isCurrentlyTracking) {
+                    Log.d("TrackingService", "Already tracking, ignoring redundant ACTION_START")
+                    return START_STICKY
+                }
+                isCurrentlyTracking = true
+                
                 // Grab the IDs sent from the UI
                 tripId = intent.getStringExtra("EXTRA_TRIP_ID") ?: ""
                 vehicleId = intent.getStringExtra("EXTRA_VEHICLE_ID") ?: ""
@@ -225,8 +232,8 @@ class TrackingService : Service() {
                 }
             }
             "ACTION_STOP" -> {
-                Log.d("TrackingService", "Stop command received via Notification Button")
-
+                isCurrentlyTracking = false
+                Log.d("TrackingService", "Stopping service")
                 val stopBroadcast = Intent("ACTION_TRACKING_STOPPED").apply {
                     setPackage(packageName)
                 }
