@@ -32,6 +32,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlin.coroutines.resume
 import com.rsubustracker.app.network.RetrofitClient
 import com.rsubustracker.app.network.StartTripRequest
 import com.rsubustracker.app.network.StartTripResponse
@@ -50,6 +53,7 @@ import com.rsubustracker.app.location.TrackingService
 import android.content.BroadcastReceiver
 import android.content.IntentFilter
 import android.os.Build
+import android.widget.Toast
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.animation.animateColorAsState
@@ -57,6 +61,13 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.shape.CircleShape
+import android.content.res.Configuration
+import androidx.compose.ui.platform.LocalConfiguration
+import android.app.Activity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import kotlin.time.Duration.Companion.milliseconds
 
 @Composable
 fun TrackerScreen(onBackClick: () -> Unit) {
@@ -64,8 +75,13 @@ fun TrackerScreen(onBackClick: () -> Unit) {
     val gradientTop = Color(0xFFC85D8D)
     val gradientBottom = Color(0xFF6CAADC)
 
+    // Configuration
+    val configuration = LocalConfiguration.current
+
     // Context & Prefs
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var isStarting by remember { mutableStateOf(false) }
     val sharedPref = context.getSharedPreferences("BusTrackerPrefs", Context.MODE_PRIVATE)
     val vehicleName = sharedPref.getString("CURRENT_VEHICLE_NAME", "Bus") ?: "Bus"
     val vehicleId = sharedPref.getString("CURRENT_VEHICLE_ID", "") ?: ""
@@ -248,36 +264,51 @@ fun TrackerScreen(onBackClick: () -> Unit) {
             ContextCompat.startForegroundService(context, prepIntent)
 
             val request = StartTripRequest(vehicleId = vehicleId, trackingMode = trackingMode)
-            attemptStartTrip(
-                context = context,
-                authHeader = authHeader,
-                request = request,
-                vehicleId = vehicleId,
-                trackingMode = trackingMode,
-                sourceId = sourceId,
-                token = token,
-                sharedPref = sharedPref,
-                onSuccess = { newTripId ->
-                    activeTripId = newTripId
-                    isTracking = true
-                    sharedPref.edit().putString("ACTIVE_TRIP_ID", activeTripId).apply()
-                    val latestToken = sharedPref.getString("SENDER_TOKEN", token) ?: token
-                    val intent = Intent(context, TrackingService::class.java).apply {
-                        action = "ACTION_START"
-                        putExtra("EXTRA_TRIP_ID", activeTripId)
-                        putExtra("EXTRA_VEHICLE_ID", vehicleId)
-                        putExtra("EXTRA_TRACKING_MODE", trackingMode)
-                        putExtra("EXTRA_SOURCE_ID", sourceId)
-                        putExtra("EXTRA_TOKEN", latestToken)
+            isStarting = true
+            scope.launch {
+                try {
+                    withTimeout(20_000L) {
+                        kotlinx.coroutines.suspendCancellableCoroutine<Unit> { cont ->
+                            attemptStartTrip(
+                                context = context,
+                                authHeader = authHeader,
+                                request = request,
+                                vehicleId = vehicleId,
+                                trackingMode = trackingMode,
+                                sourceId = sourceId,
+                                token = token,
+                                sharedPref = sharedPref,
+                                onSuccess = { newTripId ->
+                                    activeTripId = newTripId
+                                    isTracking = true
+                                    sharedPref.edit().putString("ACTIVE_TRIP_ID", activeTripId).apply()
+                                    val latestToken = sharedPref.getString("SENDER_TOKEN", token) ?: token
+                                    val intent = Intent(context, TrackingService::class.java).apply {
+                                        action = "ACTION_START"
+                                        putExtra("EXTRA_TRIP_ID", activeTripId)
+                                        putExtra("EXTRA_VEHICLE_ID", vehicleId)
+                                        putExtra("EXTRA_TRACKING_MODE", trackingMode)
+                                        putExtra("EXTRA_SOURCE_ID", sourceId)
+                                        putExtra("EXTRA_TOKEN", latestToken)
+                                    }
+                                    ContextCompat.startForegroundService(context, intent)
+                                    if (cont.isActive) cont.resume(Unit)
+                                },
+                                onFailure = { errorMessage ->
+                                    println(errorMessage)
+                                    val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
+                                    context.startService(stopIntent)
+                                    if (cont.isActive) cont.resume(Unit)
+                                }
+                            )
+                        }
                     }
-                    ContextCompat.startForegroundService(context, intent)
-                },
-                onFailure = { errorMessage ->
-                    println(errorMessage)
-                    val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
-                    context.startService(stopIntent)
+                } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                    Toast.makeText(context, "Start Tracking timed out — try again", Toast.LENGTH_LONG).show()
+                } finally {
+                    isStarting = false
                 }
-            )
+            }
         } else {
             // Permission Denied
             isTracking = false
@@ -296,6 +327,108 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                 stiffness = Spring.StiffnessLow
             )
         )
+    }
+
+    // Fullscreen in Landscape
+    val activity = context as? Activity
+    DisposableEffect(configuration.orientation) {
+        val insetsController = activity?.window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+        if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+            insetsController?.hide(WindowInsetsCompat.Type.systemBars())
+            insetsController?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        } else {
+            insetsController?.show(WindowInsetsCompat.Type.systemBars())
+        }
+        onDispose {
+            insetsController?.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    val toggleTracking: () -> Unit = {
+        if (!isTracking) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                val prepIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_PREPARE" }
+                ContextCompat.startForegroundService(context, prepIntent)
+
+                val request = StartTripRequest(vehicleId = vehicleId, trackingMode = trackingMode)
+                isStarting = true
+                scope.launch {
+                    try {
+                        withTimeout(20_000L.milliseconds) {
+                            kotlinx.coroutines.suspendCancellableCoroutine<Unit> { cont ->
+                                attemptStartTrip(
+                                    context = context, authHeader = authHeader, request = request,
+                                    vehicleId = vehicleId, trackingMode = trackingMode, sourceId = sourceId, token = token, sharedPref = sharedPref,
+                                    onSuccess = { newTripId ->
+                                        activeTripId = newTripId
+                                        isTracking = true
+                                        sharedPref.edit().putString("ACTIVE_TRIP_ID", activeTripId).apply()
+                                        val latestToken = sharedPref.getString("SENDER_TOKEN", token) ?: token
+                                        val intent = Intent(context, TrackingService::class.java).apply {
+                                            action = "ACTION_START"
+                                            putExtra("EXTRA_TRIP_ID", activeTripId)
+                                            putExtra("EXTRA_VEHICLE_ID", vehicleId)
+                                            putExtra("EXTRA_TRACKING_MODE", trackingMode)
+                                            putExtra("EXTRA_SOURCE_ID", sourceId)
+                                            putExtra("EXTRA_TOKEN", latestToken)
+                                        }
+                                        ContextCompat.startForegroundService(context, intent)
+                                        if (cont.isActive) cont.resume(Unit)
+                                    },
+                                    onFailure = { errorMessage ->
+                                        println(errorMessage)
+                                        val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
+                                        context.startService(stopIntent)
+                                        if (cont.isActive) cont.resume(Unit)
+                                    }
+                                )
+                            }
+                        }
+                    } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                        Toast.makeText(context, "Start Tracking timed out — try again", Toast.LENGTH_LONG).show()
+                    } finally {
+                        isStarting = false
+                    }
+                }
+            } else {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.POST_NOTIFICATIONS))
+                } else {
+                    permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+                }
+            }
+        } else {
+            if (activeTripId.isNotBlank()) {
+                RetrofitClient.instance.endTrip(authHeader, activeTripId).enqueue(object : Callback<Void> {
+                    override fun onResponse(call: Call<Void>, response: Response<Void>) {
+                        if (response.isSuccessful) activeTripId = ""
+                    }
+                    override fun onFailure(call: Call<Void>, t: Throwable) {}
+                })
+            }
+            val intent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
+            context.startService(intent)
+            isTracking = false
+            timeElapsedSeconds = 0
+            speed = "0 km/h"
+            sharedPref.edit().remove("ACTIVE_TRIP_ID").apply()
+        }
+    }
+
+    if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+        EntertainmentScreen(
+            isTracking = isTracking,
+            isStarting = isStarting,
+            timeElapsedSeconds = timeElapsedSeconds.toInt(),
+            stopsList = stopsList,
+            currentStation = currentStation,
+            vehicleName = vehicleName,
+            speed = speed,
+            accuracy = accuracy,
+            sensorType = if (sourceType == "mobile") "Local GPS" else "Remote Sensor",
+            onToggleTracking = toggleTracking
+        )
+        return
     }
 
     Box(
@@ -431,75 +564,11 @@ fun TrackerScreen(onBackClick: () -> Unit) {
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
                             .fillMaxWidth()
-                            .padding(bottom = 32.dp ),
+                            .padding(bottom = 32.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Button(
-                            onClick = {
-                                if (!isTracking) {
-                                    // --- THE START LOGIC ---
-                                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
-                                        val prepIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_PREPARE" }
-                                        ContextCompat.startForegroundService(context, prepIntent)
-
-                                        val request = StartTripRequest(vehicleId = vehicleId, trackingMode = trackingMode)
-                                        attemptStartTrip(
-                                            context = context,
-                                            authHeader = authHeader,
-                                            request = request,
-                                            vehicleId = vehicleId,
-                                            trackingMode = trackingMode,
-                                            sourceId = sourceId,
-                                            token = token,
-                                            sharedPref = sharedPref,
-                                            onSuccess = { newTripId ->
-                                                activeTripId = newTripId
-                                                isTracking = true
-                                                sharedPref.edit().putString("ACTIVE_TRIP_ID", activeTripId).apply()
-                                                val latestToken = sharedPref.getString("SENDER_TOKEN", token) ?: token
-                                                val intent = Intent(context, TrackingService::class.java).apply {
-                                                    action = "ACTION_START"
-                                                    putExtra("EXTRA_TRIP_ID", activeTripId)
-                                                    putExtra("EXTRA_VEHICLE_ID", vehicleId)
-                                                    putExtra("EXTRA_TRACKING_MODE", trackingMode)
-                                                    putExtra("EXTRA_SOURCE_ID", sourceId)
-                                                    putExtra("EXTRA_TOKEN", latestToken)
-                                                }
-                                                ContextCompat.startForegroundService(context, intent)
-                                            },
-                                            onFailure = { errorMessage ->
-                                                println(errorMessage)
-                                                val stopIntent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
-                                                context.startService(stopIntent)
-                                            }
-                                        )
-                                    } else {
-                                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                            permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.POST_NOTIFICATIONS))
-                                        } else {
-                                            permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
-                                        }
-                                    }
-                                } else {
-                                    // --- THE STOP LOGIC ---
-                                    if (activeTripId.isNotBlank()) {
-                                        RetrofitClient.instance.endTrip(authHeader, activeTripId).enqueue(object : Callback<Void> {
-                                            override fun onResponse(call: Call<Void>, response: Response<Void>) {
-                                                if (response.isSuccessful) activeTripId = ""
-                                            }
-                                            override fun onFailure(call: Call<Void>, t: Throwable) {}
-                                        })
-                                    }
-
-                                    val intent = Intent(context, TrackingService::class.java).apply { action = "ACTION_STOP" }
-                                    context.startService(intent)
-
-                                    isTracking = false
-                                    timeElapsedSeconds = 0
-                                    speed = "0 km/h"
-                                    sharedPref.edit().remove("ACTIVE_TRIP_ID").apply()
-                                }
-                            },
+                            onClick = toggleTracking,
                             colors = ButtonDefaults.buttonColors(containerColor = buttonColor),
                             shape = RoundedCornerShape(16.dp),
                             elevation = ButtonDefaults.buttonElevation(
