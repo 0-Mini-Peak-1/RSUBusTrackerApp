@@ -26,8 +26,12 @@ import retrofit2.Response
 
 @Composable
 fun LoginScreen(onLoginSuccess: () -> Unit) {
-    var busId by remember { mutableStateOf("") }
     val context = LocalContext.current
+    val sharedPref = context.getSharedPreferences("BusTrackerPrefs", Context.MODE_PRIVATE)
+
+    var busId by remember { mutableStateOf(sharedPref.getString("CURRENT_VEHICLE_ID", "") ?: "") }
+    var sourceId by remember { mutableStateOf(sharedPref.getString("CURRENT_SOURCE_ID", "") ?: "") }
+    var secret by remember { mutableStateOf(sharedPref.getString("CURRENT_SECRET", "") ?: "") }
 
     // Colors
     val gradientTop = Color(0xFFC85D8D)
@@ -110,31 +114,80 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = sourceId,
+                    onValueChange = { sourceId = it },
+                    label = { Text("Source ID") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedBorderColor = primaryBlue,
+                        unfocusedBorderColor = primaryBlue,
+                        focusedLabelColor = primaryBlue,
+                        unfocusedLabelColor = primaryBlue,
+                        focusedTextColor = Color.Black,
+                        unfocusedTextColor = Color.Black
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = secret,
+                    onValueChange = { secret = it },
+                    label = { Text("Secret") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedBorderColor = primaryBlue,
+                        unfocusedBorderColor = primaryBlue,
+                        focusedLabelColor = primaryBlue,
+                        unfocusedLabelColor = primaryBlue,
+                        focusedTextColor = Color.Black,
+                        unfocusedTextColor = Color.Black
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
                 Spacer(modifier = Modifier.height(32.dp))
 
                 Button(
                     onClick = {
-                        if (busId.isNotBlank()) {
-                            val request = LoginRequest(vehicleId = busId)
+                        if (busId.isNotBlank() && sourceId.isNotBlank() && secret.isNotBlank()) {
+                            val request = LoginRequest(vehicleId = busId, sourceId = sourceId, secret = secret)
 
                             RetrofitClient.instance.login(request).enqueue(object : Callback<LoginResponse> {
                                 override fun onResponse(call: Call<LoginResponse>, response: Response<LoginResponse>) {
                                     if (response.isSuccessful && response.body()?.success == true) {
                                         // Get vehicle name
                                         val vehicleName = response.body()?.vehicle?.name ?: busId
+                                        val sourceName = response.body()?.source?.name ?: "Unknown Sensor"
+                                        val sourceType = response.body()?.source?.type ?: "mobile"
 
-                                        // SAVE Vehicle ID
+                                        // SAVE Vehicle ID and Credentials
                                         val sharedPref = context.getSharedPreferences("BusTrackerPrefs", Context.MODE_PRIVATE)
                                         with (sharedPref.edit()) {
                                             putString("CURRENT_VEHICLE_ID", busId)
                                             putString("CURRENT_VEHICLE_NAME", vehicleName)
+                                            putString("CURRENT_SOURCE_ID", sourceId)
+                                            putString("CURRENT_SECRET", secret)
+                                            putString("CURRENT_SOURCE_TYPE", sourceType)
+                                            putString("CURRENT_SOURCE_NAME", sourceName)
+                                            putString("SENDER_TOKEN", response.body()?.token ?: "")
                                             apply()
                                         }
 
-                                        Toast.makeText(context, "Welcome ${response.body()?.vehicle?.name}", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Welcome $vehicleName (${sourceType.replaceFirstChar { it.uppercase() }})", Toast.LENGTH_SHORT).show()
                                         onLoginSuccess()
                                     } else {
-                                        Toast.makeText(context, "Vehicle ID not found!", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(context, "Login failed! ${response.body()?.message ?: ""}", Toast.LENGTH_LONG).show()
                                     }
                                 }
 

@@ -30,20 +30,31 @@ class LocationClient(context: Context) {
     private var locationCallback: LocationCallback? = null
 
     // Initialize the Socket Manager
-    val socketManager = ShuttleSocketManager()
+    val socketManager = ShuttleSocketManager(context)
 
     @SuppressLint("MissingPermission")
-    fun startLocationUpdates(vehicleId: String, tripId: String, onLocationUpdate: (Location) -> Unit) {
+    fun startLocationUpdates(vehicleId: String, tripId: String, sourceId: String, token: String, onLocationUpdate: (Location) -> Unit) {
 
         // Connect the real-time socket
-        socketManager.connect()
+        socketManager.connect(token)
 
         // Define what happens when we get a new location
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 result.lastLocation?.let { location ->
                     // Pass it back to TrackerScreen so it can calculate the station
-                    // and fire the socket from there!
+                    // Backend handles the station maths
+                    socketManager.sendLocationUpdate(
+                        sourceId = sourceId,
+                        tripId = tripId,
+                        busId = vehicleId,
+                        lat = location.latitude,
+                        lng = location.longitude,
+                        speed = location.speed,
+                        bearing = location.bearing,
+                        accuracy = location.accuracy,
+                        station = ""
+                    )
                     onLocationUpdate(location)
                 }
             }
