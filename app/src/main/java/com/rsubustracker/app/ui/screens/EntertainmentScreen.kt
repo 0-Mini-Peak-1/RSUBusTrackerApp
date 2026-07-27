@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.animation.core.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -206,28 +207,41 @@ fun TrackingSidebar(
                 val startIdx = maxOf(0, currentStopIdx - 2)
                 val displayStops = stopsList.drop(startIdx).take(8)
                 
+                val infiniteTransition = rememberInfiniteTransition()
+                val pulseAlpha by infiniteTransition.animateFloat(
+                    initialValue = 0.4f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(800, easing = LinearEasing),
+                        repeatMode = RepeatMode.Reverse
+                    )
+                )
+                val colorWarning = Color(0xFFFFD54F) // Yellow color
+                
                 displayStops.forEachIndexed { i, stop ->
                     val actualIdx = startIdx + i
+                    val isCurrent = actualIdx == currentStopIdx
+                    
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp)) {
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
                                 .background(
-                                    color = if (actualIdx < currentStopIdx) ColorSuccess else if (actualIdx == currentStopIdx) Color.White else Color.White.copy(alpha = 0.25f),
+                                    color = if (actualIdx < currentStopIdx) ColorSuccess else if (isCurrent) colorWarning.copy(alpha = pulseAlpha) else Color.White.copy(alpha = 0.25f),
                                     shape = CircleShape
                                 )
                                 .border(
-                                    width = if (actualIdx == currentStopIdx) 2.dp else 0.dp,
-                                    color = if (actualIdx == currentStopIdx) Color.White.copy(alpha = 0.35f) else Color.Transparent,
+                                    width = if (isCurrent) 2.dp else 0.dp,
+                                    color = if (isCurrent) colorWarning.copy(alpha = pulseAlpha * 0.5f) else Color.Transparent,
                                     shape = CircleShape
                                 )
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = stop.nameEn,
-                            color = if (actualIdx <= currentStopIdx) Color.White else Color.White.copy(alpha = 0.4f),
+                            color = if (actualIdx < currentStopIdx) Color.White else if (isCurrent) colorWarning.copy(alpha = pulseAlpha) else Color.White.copy(alpha = 0.4f),
                             fontSize = 11.sp,
-                            fontWeight = if (actualIdx == currentStopIdx) FontWeight.SemiBold else FontWeight.Normal,
+                            fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
